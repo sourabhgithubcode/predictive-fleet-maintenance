@@ -41,5 +41,5 @@ This project demonstrates the application of predictive analytics and operations
 
 **Sourabh R Rodagi**  
 M.S. Business Analytics, DePaul University  
-[LinkedIn](https://linkedin.com/in/sourabhrodagi) | [Email](mailto:sourabh.rodagi@gmail.com)
+[LinkedIn](https://www.linkedin.com/in/sourabh-rodagi/) | [Email](mailto:srodagi@depaul.edu)
 
