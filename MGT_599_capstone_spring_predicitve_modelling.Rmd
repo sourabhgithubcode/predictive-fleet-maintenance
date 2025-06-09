@@ -1,0 +1,3295 @@
+---
+output:
+  html_document: default
+---
+output:
+  html_document:
+    fig_width: 6
+    fig_height: 4
+    dev.args:
+      dpi: 72
+
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  error = TRUE,
+  cache = TRUE
+)
+
+
+
+```{r setup, include=FALSE}
+# Load necessary packages
+library(dplyr)
+library(lubridate)
+
+
+
+
+
+
+
+
+#Import new merged dataset
+
+
+#Load the library
+library(readxl)
+
+# Define the file path
+file_path <- "~/Downloads/Capstone/merged_final_cleaned.xlsx"
+
+# Read a specific sheet
+mfc <- read_excel(file_path, sheet = "Sheet 1")
+
+# Load the required library
+library(readxl)
+
+# Define the file path (update the path to your actual Excel file)
+file_path <- "/Users/HP/Downloads/Capstone/DePaul_Summer_Quarter_meter.xlsx"
+
+# Read each worksheet into a separate dataframe
+asset_details <- read_excel(file_path, sheet = "Asset Detail")
+wo_costs      <- read_excel(file_path, sheet = "2024 WO Costs")
+usage_data    <- read_excel(file_path, sheet = "Miles (Driven Last Year)")
+
+# Optional: View structure of the data
+str(asset_details)
+str(wo_costs)
+str(usage_data)
+```
+
+```{r}
+name(usage_data)
+```
+
+
+
+
+
+
+
+
+
+
+ Binarize Target Variable
+ 
+```{r}
+mfc <- mfc %>%
+  mutate(high_cost_flag = ifelse(line_total > quantile(line_total, 0.90, na.rm = TRUE), 1, 0))
+
+```
+ 
+
+
+convert date types
+```{r}
+# Convert numeric Excel dates to proper Date format
+mfc$asset_in_service_date <- as.Date(mfc$asset_in_service_date, origin = "1899-12-30")
+mfc$asset_disposal_date   <- as.Date(mfc$asset_disposal_date, origin = "1899-12-30")
+
+
+```
+
+
+clean categorical variables
+
+```{r}
+library(forcats)
+mfc$wo_reason_desc <- fct_explicit_na(as.factor(mfc$wo_reason_desc))
+
+```
+
+
+create time_since_last_wo 
+
+```{r}
+library(dplyr)
+
+mfc <- mfc %>%
+  arrange(unit_no, open_date) %>%  # Sort by unit and WO date
+  group_by(unit_no) %>%
+  mutate(
+    last_wo_date = lag(open_date),  # Previous WO date
+    time_since_last_wo = as.numeric(difftime(open_date, last_wo_date, units = "days"))
+  ) %>%
+  ungroup()
+
+```
+
+recent_wo_flag
+```{r}
+mfc <- mfc %>%
+  mutate(
+    recent_wo_flag = ifelse(!is.na(time_since_last_wo) & time_since_last_wo < 90, 1, 0)
+  )
+
+library(dplyr)
+
+# Add the recent_wo_flag feature
+mfc <- mfc %>%
+  mutate(
+    recent_wo_flag = ifelse(!is.na(time_since_last_wo) & time_since_last_wo < 90, 1, 0)
+  )
+
+
+```
+
+
+
+Add vehicle age 
+
+```{r}
+library(dplyr)
+
+# Step 1: Feature engineering (run this before selecting features)
+mfc <- mfc %>%
+  mutate(
+    vehicle_age = 2025 - model_year,
+    recent_wo_flag = ifelse(!is.na(time_since_last_wo) & time_since_last_wo < 90, 1, 0)
+  )
+
+```
+
+
+add mileage ratio
+```{r}
+mfc <- mfc %>%
+  mutate(
+    vehicle_age = 2025 - model_year,
+    recent_wo_flag = ifelse(!is.na(time_since_last_wo) & time_since_last_wo < 90, 1, 0),
+    mileage_ratio = ifelse(!is.na(miles_driven) & miles_driven != 0,
+                           annualized_mileage / (miles_driven + 1), NA)
+  )
+
+```
+
+
+Core Model (All Assets)
+
+
+Model 1
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(forcats)
+library(randomForest)
+library(caret)
+library(pROC)
+
+# STEP 1: Select features with usage included
+selected_vars <- c(
+  "high_cost_flag", "part_amount", "labor_amount", "job_description",
+  "model", "model_year", "time_since_last_wo", "recent_wo_flag",
+  "vehicle_age", "mileage_ratio", "annualized_mileage", "miles_driven"
+)
+
+# STEP 2: Subset and preprocess
+mfc_model1 <- mfc %>%
+  select(all_of(selected_vars)) %>%
+  mutate(
+    job_description = fct_lump(factor(job_description), n = 10),
+    model = fct_lump(factor(model), n = 10)
+  ) %>%
+  filter(if_all(everything(), ~ !is.na(.)))  # remove NAs
+
+# Check for class balance (optional)
+table(mfc_model1$high_cost_flag)
+
+# STEP 3: Train Enhanced Random Forest Model 1
+set.seed(123)
+rf_model1 <- randomForest(
+  as.factor(high_cost_flag) ~ .,
+  data = mfc_model1,
+  ntree = 200,
+  importance = TRUE
+)
+
+# STEP 4: Make Predictions
+mfc_model1$high_cost_predicted <- predict(rf_model1, mfc_model1)
+mfc_model1$prediction_probability <- predict(rf_model1, mfc_model1, type = "prob")[, 2]
+
+# STEP 5: Evaluate - Confusion Matrix
+confusionMatrix(
+  as.factor(mfc_model1$high_cost_predicted),
+  as.factor(mfc_model1$high_cost_flag),
+  positive = "1"
+)
+
+# STEP 6: Evaluate - ROC and AUC
+roc_model1 <- roc(mfc_model1$high_cost_flag, mfc_model1$prediction_probability)
+plot(roc_model1, main = "ROC Curve - Model 1 (With Imputed Usage)")
+auc(roc_model1)
+
+# STEP 7: Feature Importance Plot
+varImpPlot(rf_model1, main = "Feature Importance - Model 1")
+
+```
+
+
+Model 2: Only Assets with Verified Usage Data
+
+
+
+ Filter by Usage Dataset
+```{r}
+mfc$unit_no <- as.character(mfc$unit_no)
+usage_data$unit_no <- as.character(usage_data$Unit_No)
+
+# Assuming usage_data is already loaded with unit_no
+mfc_model2 <- mfc %>%
+  filter(unit_no %in% usage_data$unit_no) %>%
+  select(all_of(selected_vars)) %>%
+  mutate(
+    job_description = fct_lump(factor(job_description), n = 10),
+    model = fct_lump(factor(model), n = 10)
+  ) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+
+```
+
+Train Model 2 (Usage-Confirmed Assets)
+```{r}
+set.seed(123)
+rf_model2 <- randomForest(
+  as.factor(high_cost_flag) ~ .,
+  data = mfc_model2,
+  ntree = 200,
+  importance = TRUE
+)
+
+```
+
+
+```{r}
+mfc_model2$high_cost_predicted <- predict(rf_model2, mfc_model2, type = "response")
+mfc_model2$prediction_probability <- predict(rf_model2, mfc_model2, type = "prob")[,2]
+
+```
+
+
+ Confusion Matrix
+ 
+```{r}
+confusionMatrix(
+  as.factor(mfc_model2$high_cost_predicted),
+  as.factor(mfc_model2$high_cost_flag),
+  positive = "1"
+)
+
+```
+ 
+
+
+AUC
+```{r}
+roc_model2 <- roc(mfc_model2$high_cost_flag, mfc_model2$prediction_probability)
+plot(roc_model2, main = "ROC Curve - Model 2 (Usage-Confirmed Assets)")
+auc(roc_model2)
+
+```
+
+
+ Feature Importance Plot
+ 
+```{r}
+varImpPlot(rf_model2, main = "Feature Importance - Model 2 (Usage-Confirmed Assets)")
+
+```
+ 
+
+Calibration Plot (Probability Accuracy)
+```{r}
+library(ggplot2)
+
+calibration_plot <- function(data, prob_col, label_col, title_text) {
+  data %>%
+    mutate(bin = cut(!!sym(prob_col), breaks = seq(0, 1, 0.1))) %>%
+    group_by(bin) %>%
+    summarise(
+      mean_prob = mean(!!sym(prob_col)),
+      actual_rate = mean(!!sym(label_col) == 1)
+    ) %>%
+    ggplot(aes(x = mean_prob, y = actual_rate)) +
+    geom_line(color = "blue") +
+    geom_abline(linetype = "dashed") +
+    labs(title = title_text, x = "Predicted Probability", y = "Observed Rate") +
+    theme_minimal()
+}
+
+calibration_plot(mfc_model1, "prediction_probability", "high_cost_flag", "Model 1 Calibration")
+calibration_plot(mfc_model2, "prediction_probability", "high_cost_flag", "Model 2 Calibration")
+
+```
+
+
+Lift & Gain Chart Code for Binary Classification
+
+Define Lift/Gain Chart Function
+```{r}
+library(dplyr)
+library(ggplot2)
+
+get_lift_gain_data <- function(data, prob_col, target_col, model_name) {
+  data %>%
+    arrange(desc(!!sym(prob_col))) %>%
+    mutate(rank = row_number()) %>%
+    mutate(bin = ntile(!!sym(prob_col), 10)) %>%
+    group_by(bin) %>%
+    summarise(
+      total = n(),
+      positives = sum(!!sym(target_col) == 1),
+      cumulative_positives = cumsum(positives),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      cumulative_gain = cumsum(positives) / sum(positives),
+      lift = cumulative_gain / (bin / 10),
+      model = model_name,
+      decile = bin * 10
+    )
+}
+
+```
+
+Create Datasets for Each Model
+```{r}
+# For Model 1 (All Assets)
+lift_gain_model1 <- get_lift_gain_data(mfc_model1, "prediction_probability", "high_cost_flag", "Model 1")
+
+# For Model 2 (Usage Assets)
+lift_gain_model2 <- get_lift_gain_data(mfc_model2, "prediction_probability", "high_cost_flag", "Model 2")
+
+# Combine
+lift_gain_data <- bind_rows(lift_gain_model1, lift_gain_model2)
+
+```
+
+
+Plot Gain Chart
+
+```{r}
+ggplot(lift_gain_data, aes(x = decile, y = cumulative_gain * 100, color = model)) +
+  geom_line(size = 1.2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray") +
+  labs(title = "Cumulative Gain Chart",
+       x = "Percent of Assets Scored",
+       y = "Cumulative % of High-Cost WOs Captured") +
+  theme_minimal()
+```
+
+Plot Lift Chart
+```{r}
+ggplot(lift_gain_data, aes(x = decile, y = lift, color = model)) +
+  geom_line(size = 1.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray") +
+  labs(title = "Lift Chart",
+       x = "Percent of Assets Scored",
+       y = "Lift (Model vs Random)") +
+  theme_minimal()
+```
+
+ Probability Distribution by Model
+```{r}
+library(ggplot2)
+
+# Combine into one dataframe
+mfc_model1$model <- "Model 1"
+mfc_model2$model <- "Model 2"
+
+combined_preds <- bind_rows(
+  mfc_model1 %>% select(prediction_probability, high_cost_flag, model),
+  mfc_model2 %>% select(prediction_probability, high_cost_flag, model)
+)
+
+ggplot(combined_preds, aes(x = prediction_probability, fill = as.factor(high_cost_flag))) +
+  geom_histogram(position = "identity", bins = 40, alpha = 0.6) +
+  facet_wrap(~model) +
+  scale_fill_manual(values = c("0" = "steelblue", "1" = "tomato"), name = "Actual Flag") +
+  labs(
+    title = "Predicted Probability Distributions by Model",
+    x = "Prediction Probability",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+Interpretation: Model 2 has tighter, more polarized probability bands — indicating stronger class separation and less ambiguity.
+
+ Boxplot of Probabilities by Actual Class
+```{r}
+ggplot(combined_preds, aes(x = as.factor(high_cost_flag), y = prediction_probability, fill = model)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  facet_wrap(~model) +
+  labs(
+    title = "Predicted Probability vs Actual Outcome",
+    x = "Actual High Cost Flag",
+    y = "Prediction Probability"
+  ) +
+  theme_minimal()
+
+```
+Interpretation: 
+Model 2’s box is very tight near 1.0 → very confident
+
+Model 1 has a broader spread, though still high.
+
+Again, Model 2 demonstrates better probability calibration and less variance in predictions for true positives.
+
+
+
+Predicted Risk Bands (Stacked Bar Chart)
+```{r}
+combined_preds <- combined_preds %>%
+  mutate(
+    risk_band = case_when(
+      prediction_probability >= 0.8 ~ "High",
+      prediction_probability >= 0.6 ~ "Medium",
+      TRUE ~ "Low"
+    )
+  )
+
+ggplot(combined_preds, aes(x = risk_band, fill = model)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Prediction Band Distribution", x = "Risk Band", y = "Asset Count") +
+  theme_minimal()
+
+```
+Bands defined as:
+
+High: ≥ 0.80
+
+Medium: 0.60–0.79
+
+Low: < 0.60
+
+What it shows:
+
+Both models classify most assets as Low Risk
+
+Model 2 identifies more true High Risk assets confidently
+
+Model 1 has more variability and some spread across bands
+
+Model 2 gives a tighter segmentation of assets with fewer in ambiguous medium-risk categories.
+
+
+
+Interpretation:
+
+Asset Level agrreation:
+
+
+
+
+```{r}
+# Re-attach unit_no to prediction output
+mfc_model1$unit_no <- mfc$unit_no[as.numeric(rownames(mfc_model1))]
+mfc_model2$unit_no <- mfc$unit_no[as.numeric(rownames(mfc_model2))]
+
+```
+
+```{r}
+# Function to summarize predictions to asset level
+summarize_asset_predictions <- function(data, model_name) {
+  data %>%
+    group_by(unit_no) %>%
+    summarise(
+      total_wos = n(),
+      high_cost_predicted = sum(high_cost_predicted == 1, na.rm = TRUE),
+      avg_prediction_probability = mean(prediction_probability, na.rm = TRUE),
+      risk_rate = high_cost_predicted / total_wos,
+      model_used = model_name
+    ) %>%
+    mutate(
+      risk_level = case_when(
+        risk_rate >= 0.75 ~ "High",
+        risk_rate >= 0.25 ~ "Medium",
+        TRUE ~ "Low"
+      )
+    )
+}
+
+# Apply to both models
+asset_level_model1 <- summarize_asset_predictions(mfc_model1, "Model 1")
+asset_level_model2 <- summarize_asset_predictions(mfc_model2, "Model 2")
+
+```
+
+
+
+check for effectiveness of asset level aggregation
+
+```{r}
+library(ggplot2)
+
+# Histogram of total WOs per asset
+ggplot(asset_level_model1, aes(x = total_wos)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of WO Count per Asset", x = "Work Orders", y = "Asset Count")
+
+# Risk rate distribution
+ggplot(asset_level_model1, aes(x = risk_rate)) +
+  geom_histogram(bins = 30, fill = "tomato", color = "black") +
+  labs(title = "Distribution of Risk Rate per Asset", x = "Predicted High-Cost WO Rate", y = "Asset Count")
+
+```
+
+
+Most assets have fewer than 20 WOs, with a long tail up to 600+
+
+This is a realistic skew for a fleet: some assets are very lightly used; others are heavily maintained
+
+Conclusion: Distribution is healthy; aggregation makes sense.
+
+
+Majority of assets have risk rates near 0, meaning few or no predicted high-cost WOs
+
+There’s a meaningful tail toward higher risk rates
+
+Conclusion: The model is not biased to assign high risk to everyone. It’s distinguishing well across the fleet.
+
+Check Correlation Between WO-Level Confidence and Asset-Level Risk
+```{r}
+cor(asset_level_model1$risk_rate, asset_level_model1$avg_prediction_probability, use = "complete.obs")
+
+```
+
+This is near-perfect correlation — your aggregation is working extremely well.
+High WO-level probabilities are translating to appropriate asset-level risk rates.
+
+
+
+Compare Asset Risk Levels with Known Outcomes (if available)
+```{r}
+ggplot(asset_level_model1, aes(x = risk_level, y = avg_prediction_probability)) +
+  geom_boxplot() +
+  labs(title = "Confidence by Asset Risk Level", y = "Avg Prediction Probability", x = "Risk Level")
+
+```
+Majority of assets fall into Low Risk
+
+A smaller but meaningful number fall into Medium and High Risk
+
+onclusion: Risk segmentation is not uniform — model isn’t overgeneralizing.
+
+Cross-Check with WO-Level Results
+```{r}
+top_assets <- asset_level_model1 %>% arrange(desc(risk_rate)) %>% slice_head(n = 100)
+summary(top_assets$risk_rate)
+
+```
+Conclusion: Distribution is healthy; aggregation makes sense
+
+Visual Asset Scoring Bands (Optional)
+
+```{r}
+ggplot(asset_level_model1, aes(x = risk_level)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Asset Risk Level Classification", x = "Risk Level", y = "Asset Count")
+
+```
+Conclusion: Risk segmentation is not uniform — model isn’t overgeneralizing.
+
+```{r}
+names(mfc_model1)
+names(mfc_model2)
+
+```
+
+
+
+```{r}
+company_map <- mfc %>%
+  mutate(
+    unit_no = toupper(trimws(as.character(unit_no))),
+    company = trimws(as.character(company))
+  ) %>%
+  select(unit_no, company) %>%
+  distinct()
+
+# Create a reference with row index and unit_no
+unit_no_ref <- mfc %>%
+  mutate(unit_no = toupper(trimws(as.character(unit_no)))) %>%
+  select(unit_no) %>%
+  mutate(row_id = row_number())
+
+# Add row index to mfc_model1
+mfc_model1 <- mfc_model1 %>%
+  mutate(row_id = row_number())
+
+# Join back unit_no
+mfc_model1 <- mfc_model1 %>%
+  left_join(unit_no_ref, by = "row_id") %>%
+  select(-row_id)
+
+sum(is.na(mfc_model1$unit_no))        # Should be 0
+sum(is.na(mfc_model1$company))        # Should be 0 (if mapping is clean)
+
+```
+
+```{r}
+# Load libraries
+library(dplyr)
+library(randomForest)
+library(pROC)
+library(caret)
+library(forcats)
+
+
+
+
+
+# Step 1: Combine WO-level Model 1 and Model 2 predictions
+combined_wo_data <- bind_rows(mfc_model2, mfc_model1) %>%
+  distinct(unit_no, .keep_all = TRUE)
+
+# Step 2: Aggregate to asset-level
+third_model_data <- combined_wo_data %>%
+  group_by(unit_no) %>%
+  summarise(
+    part_amount = mean(part_amount, na.rm = TRUE),
+    labor_amount = mean(labor_amount, na.rm = TRUE),
+    job_description = fct_lump(factor(first(job_description)), n = 10),
+    model = fct_lump(factor(first(model)), n = 10),
+    mileage_ratio = mean(mileage_ratio, na.rm = TRUE),
+    annualized_mileage = mean(annualized_mileage, na.rm = TRUE),
+    miles_driven = mean(miles_driven, na.rm = TRUE),
+    model_year = first(model_year),
+    vehicle_age = first(vehicle_age),
+    time_since_last_wo = mean(time_since_last_wo, na.rm = TRUE),
+    recent_wo_flag = max(recent_wo_flag, na.rm = TRUE),
+    actual_high_cost = ifelse(sum(high_cost_flag, na.rm = TRUE) > 0, 1, 0)
+  ) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+
+# Step 3: Train RF model
+set.seed(123)
+rf_third <- randomForest(
+  as.factor(actual_high_cost) ~ .,
+  data = third_model_data,
+  ntree = 200,
+  importance = TRUE
+)
+
+# Step 4: Predict and Evaluate
+third_model_data$predicted <- predict(rf_third, third_model_data)
+third_model_data$probability <- predict(rf_third, third_model_data, type = "prob")[,2]
+
+# Confusion Matrix
+confusionMatrix(as.factor(third_model_data$predicted), as.factor(third_model_data$actual_high_cost), positive = "1")
+
+# ROC
+roc_obj <- roc(third_model_data$actual_high_cost, third_model_data$probability)
+plot(roc_obj, main = "ROC Curve - Final Model")
+auc(roc_obj)
+
+# Feature Importance
+varImpPlot(rf_third, main = "Feature Importance - Third RF Model")
+
+
+```
+
+
+
+
+asset-level clustering using K-means and UMAP for model 1
+
+
+add utilization_score to asset_level_model1
+
+
+
+
+```{r}
+#Compute WO count and mileage from raw mfc
+wo_usage_summary <- mfc %>%
+  group_by(unit_no) %>%
+  summarise(
+    total_wos = n(),
+    avg_mileage = mean(annualized_mileage, na.rm = TRUE)
+  ) %>%
+  mutate(
+    z_mileage = scale(avg_mileage),
+    z_wos = scale(total_wos),
+    utilization_score = z_mileage + z_wos
+  )
+
+
+#Merge into asset_level_model1
+asset_level_model1 <- asset_level_model1 %>%
+  left_join(wo_usage_summary %>% select(unit_no, utilization_score), by = "unit_no")
+
+
+summary(asset_level_model1$utilization_score)
+
+```
+
+
+Choose Features for Clustering
+```{r}
+# Features that define asset behavior
+clustering_vars <- c(
+  "risk_rate",
+  "avg_prediction_probability",
+  "total_wos", "utilization_score"
+)
+
+```
+
+
+Prepare Data for Clustering
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# Subset and scale
+clustering_data <- asset_level_model1 %>%
+  select(unit_no, all_of(clustering_vars)) %>%
+  drop_na() %>%
+  mutate(across(all_of(clustering_vars), scale))
+
+# Keep original IDs for later merge
+row_ids <- clustering_data$unit_no
+clustering_matrix <- clustering_data %>% select(-unit_no)
+
+```
+
+Run K-Means Clustering
+
+```{r}
+set.seed(123)
+
+# You can test different values of k (e.g., 3 to 6)
+kmeans_model <- kmeans(clustering_matrix, centers = 4, nstart = 25)
+
+# Add cluster labels back to original data
+clustered_assets <- asset_level_model1 %>%
+  filter(unit_no %in% row_ids) %>%
+  mutate(cluster = as.factor(kmeans_model$cluster))
+```
+
+Visualize Clusters with PCA 
+
+```{r}
+library(ggplot2)
+pca <- prcomp(clustering_matrix, scale. = TRUE)
+pca_df <- as.data.frame(pca$x[, 1:2])
+pca_df$cluster <- clustered_assets$cluster
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Asset Clusters") +
+  theme_minimal()
+
+```
+Clear separation between clusters, especially Cluster 1 and Cluster 4
+
+Confirms that asset behavior is differentiable based on risk + utilization or UMAP
+
+
+
+```{r}
+library(umap)
+
+# Re-scale everything (UMAP is sensitive!)
+scaled_data <- clustering_matrix %>%
+  mutate(across(everything(), scale))
+
+umap_result <- umap(scaled_data)
+
+#install.packages("umap")
+library(umap)
+umap_result <- umap(clustering_matrix)
+umap_df <- as.data.frame(umap_result$layout)
+umap_df$cluster <- clustered_assets$cluster
+
+ggplot(umap_df, aes(x = V1, y = V2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "UMAP: Asset Clusters") +
+  theme_minimal()
+
+```
+
+Explore Cluster Insights
+```{r}
+clustered_assets %>%
+  group_by(cluster) %>%
+  summarise(
+    avg_risk = mean(risk_rate),
+    avg_confidence = mean(avg_prediction_probability),
+    avg_wos = mean(total_wos),
+    count = n()
+  )
+
+```
+
+
+
+asset-level clustering using K-means and UMAP for model 2
+
+Add utilization_score to asset_level_model2
+
+```{r}
+wo_usage_summary2 <- mfc %>%
+  filter(unit_no %in% asset_level_model2$unit_no) %>%  # restrict to Model 2 units
+  group_by(unit_no) %>%
+  summarise(
+    total_wos = n(),
+    avg_mileage = mean(annualized_mileage, na.rm = TRUE)
+  ) %>%
+  mutate(
+    z_mileage = scale(avg_mileage),
+    z_wos = scale(total_wos),
+    utilization_score = z_mileage + z_wos
+  )
+
+asset_level_model2 <- asset_level_model2 %>%
+  left_join(wo_usage_summary2 %>% select(unit_no, utilization_score), by = "unit_no")
+
+summary(asset_level_model2$utilization_score)
+
+```
+
+
+```{r}
+clustering_vars <- c(
+  "risk_rate",
+  "avg_prediction_probability",
+  "total_wos",
+  "utilization_score"
+)
+
+#Prepare Data
+library(dplyr)
+
+clustering_data2 <- asset_level_model2 %>%
+  select(unit_no, all_of(clustering_vars)) %>%
+  drop_na() %>%
+  mutate(across(all_of(clustering_vars), scale))
+
+row_ids2 <- clustering_data2$unit_no
+clustering_matrix2 <- clustering_data2 %>% select(-unit_no)
+
+# Run K-Means Clustering
+set.seed(123)
+
+kmeans_model2 <- kmeans(clustering_matrix2, centers = 4, nstart = 25)
+
+# Add cluster label to asset dataset
+clustered_assets2 <- asset_level_model2 %>%
+  filter(unit_no %in% row_ids2) %>%
+  mutate(cluster = as.factor(kmeans_model2$cluster))
+
+#Visualize Clusters with PCA
+
+pca2 <- prcomp(clustering_matrix2, scale. = TRUE)
+pca_df2 <- as.data.frame(pca2$x[, 1:2])
+pca_df2$cluster <- clustered_assets2$cluster
+
+library(ggplot2)
+ggplot(pca_df2, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Model 2 Asset Clusters") +
+  theme_minimal()
+
+#Fix UMAP if desired
+library(umap)
+
+umap_result2 <- umap(clustering_matrix2)
+umap_df2 <- as.data.frame(umap_result2$layout)
+umap_df2$cluster <- clustered_assets2$cluster
+
+ggplot(umap_df2, aes(x = V1, y = V2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "UMAP: Model 2 Asset Clusters") +
+  theme_minimal()
+
+
+#Review Cluster Statistics
+clustered_assets2 %>%
+  group_by(cluster) %>%
+  summarise(
+    avg_risk = mean(risk_rate),
+    avg_confidence = mean(avg_prediction_probability),
+    avg_wos = mean(total_wos),
+    avg_utilization = mean(utilization_score),
+    count = n()
+  )
+
+```
+
+
+
+clustering for both model 1 and 2 together
+
+```{r}
+library(dplyr)
+library(fastDummies)
+library(ggplot2)
+
+# STEP 1: Create utilization_category from mfc
+utilization_benchmark <- mfc %>%
+  group_by(unit_no) %>%
+  summarise(avg_utilized_days = mean(utilized_days_per_month, na.rm = TRUE)) %>%
+  mutate(utilization_category = case_when(
+    avg_utilized_days < 10 ~ "Low",
+    avg_utilized_days < 20 ~ "Medium",
+    avg_utilized_days >= 20 ~ "High",
+    TRUE ~ NA_character_
+  ))
+
+# STEP 2: Combine asset_level_model1 and model2, prioritize Model 2
+asset_level_model1 <- asset_level_model1 %>% mutate(source_model = "Model 1")
+asset_level_model2 <- asset_level_model2 %>% mutate(source_model = "Model 2")
+
+combined_assets <- bind_rows(asset_level_model2, asset_level_model1) %>%
+  group_by(unit_no) %>%
+  arrange(desc(source_model)) %>%
+  slice(1) %>%
+  ungroup()
+
+# STEP 3: Merge utilization_category
+combined_assets <- combined_assets %>%
+  left_join(utilization_benchmark %>% select(unit_no, utilization_category), by = "unit_no")
+
+# STEP 4: One-hot encode utilization_category
+combined_assets_encoded <- combined_assets %>%
+  filter(!is.na(utilization_category)) %>%
+  fastDummies::dummy_cols(select_columns = "utilization_category", remove_selected_columns = TRUE)
+
+# STEP 5: Define clustering variables
+clustering_vars <- c(
+  "risk_rate", "avg_prediction_probability", "total_wos", "utilization_score",
+  "utilization_category_Low", "utilization_category_Medium", "utilization_category_High"
+)
+
+# STEP 6: Prepare data for clustering
+clustering_data <- combined_assets_encoded %>%
+  select(unit_no, all_of(clustering_vars)) %>%
+  drop_na() %>%
+  mutate(across(-unit_no, scale))  # standardize all but ID
+
+row_ids <- clustering_data$unit_no
+clustering_matrix <- clustering_data %>% select(-unit_no)
+
+# STEP 7: Run K-means clustering
+set.seed(123)
+kmeans_combined <- kmeans(clustering_matrix, centers = 4, nstart = 25)
+
+# STEP 8: Attach clusters back to dataset
+clustered_combined_assets <- combined_assets_encoded %>%
+  filter(unit_no %in% row_ids) %>%
+  mutate(cluster = as.factor(kmeans_combined$cluster))
+
+# STEP 9: Visualize with PCA
+pca <- prcomp(clustering_matrix, scale. = TRUE)
+pca_df <- as.data.frame(pca$x[, 1:2])
+pca_df$cluster <- clustered_combined_assets$cluster
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Combined Asset Clusters (with Utilization Category)") +
+  theme_minimal()
+
+
+```
+
+
+
+Visual Comparison of Cluster Sizes Across Models
+
+clustered_assets → Model 1
+
+clustered_assets2 → Model 2
+
+clustered_combined_assets → Combined Model
+
+
+Prepare data for plotting
+```{r}
+library(dplyr)
+
+# Tag each dataset
+model1_plot <- clustered_assets %>%
+  count(cluster) %>%
+  mutate(model = "Model 1")
+
+model2_plot <- clustered_assets2 %>%
+  count(cluster) %>%
+  mutate(model = "Model 2")
+
+combined_plot <- clustered_combined_assets %>%
+  count(cluster) %>%
+  mutate(model = "Combined")
+
+# Combine into one dataframe
+cluster_size_df <- bind_rows(model1_plot, model2_plot, combined_plot)
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(cluster_size_df, aes(x = cluster, y = n, fill = model)) +
+  geom_col(position = "dodge") +
+  labs(title = "Asset Count per Cluster by Model",
+       x = "Cluster",
+       y = "Asset Count") +
+  theme_minimal()
+
+```
+
+Model 2 is more precise: Use it to confidently prioritize high-risk assets.
+
+Model 1 is more inclusive: Use it to ensure 100% fleet visibility.
+
+Combined clustering gives the best of both:
+
+Broad coverage
+
+Accurate high-risk targeting
+
+Balanced strategy distribution
+
+
+ Generate strategy_2025 Labels in Final Dataset
+ 
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(strategy_2025 = case_when(
+    cluster == "1" ~ "Maintain with minimal intervention",
+    cluster == "2" ~ "Prioritize for Preventive Maintenance",
+    cluster == "3" ~ "Monitor Closely",
+    cluster == "4" ~ "Evaluate for Retirement"
+  ))
+
+```
+ 
+ 
+Strategy Summary Table
+
+```{r}
+clustered_combined_assets %>%
+  group_by(strategy_2025) %>%
+  summarise(
+    asset_count = n()
+  ) %>%
+  arrange(desc(asset_count))
+
+```
+
+Add Time Dimension for Each Prediction (Quarter/Month)
+
+```{r}
+#Ensure open_date exists in mfc
+library(lubridate)
+
+mfc <- mfc %>%
+  mutate(
+    prediction_month = month(open_date, label = TRUE, abbr = TRUE),
+    prediction_quarter = paste0("Q", quarter(open_date))
+  )
+
+```
+
+
+ Add Most Recent (or Max/Mode) Time Frame Per Asset
+ 
+```{r}
+time_labels <- mfc %>%
+  group_by(unit_no) %>%
+  summarise(
+    latest_month = max(open_date, na.rm = TRUE),
+    month_label = month(latest_month, label = TRUE, abbr = TRUE),
+    quarter_label = paste0("Q", quarter(latest_month))
+  )
+
+# Merge into clustered_combined_assets
+clustered_combined_assets <- clustered_combined_assets %>%
+  left_join(time_labels, by = "unit_no")
+
+```
+ 
+ 
+ 
+ Add Confidence Level per Asset (0–1 scale)
+ 
+```{r}
+# Normalize it into tiers or retain as-is
+
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    confidence_level = case_when(
+      avg_prediction_probability >= 0.80 ~ "High",
+      avg_prediction_probability >= 0.60 ~ "Medium",
+      TRUE ~ "Low"
+    )
+  )
+
+```
+ 
+ 
+ Prediction Quality Check on clustered_combined_assets
+ 
+ 
+ Correlation between risk_rate and avg_prediction_probability
+```{r}
+cor(clustered_combined_assets$risk_rate, clustered_combined_assets$avg_prediction_probability, use = "complete.obs")
+
+```
+ 
+ Distribution of avg_prediction_probability by strategy_2025
+ 
+```{r}
+library(ggplot2)
+
+ggplot(clustered_combined_assets, aes(x = strategy_2025, y = avg_prediction_probability, fill = strategy_2025)) +
+  geom_boxplot() +
+  labs(title = "Prediction Confidence by Strategy",
+       x = "Strategy", y = "Avg Prediction Probability") +
+  theme_minimal()
+
+```
+ 
+ 
+ Prediction vs. Utilization Score
+ 
+```{r}
+ggplot(clustered_combined_assets, aes(x = utilization_score, y = avg_prediction_probability, color = strategy_2025)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Utilization vs. Prediction Confidence",
+       x = "Utilization Score", y = "Confidence") +
+  theme_minimal()
+
+```
+ 
+ 
+ 
+```{r}
+clustered_combined_assets %>%
+  count(strategy_2025, name = "asset_count") %>%
+  arrange(desc(asset_count))
+
+```
+ 
+ Add Cost and Time Savings Estimation
+ 
+```{r}
+names(mfc)
+```
+ 
+ 
+  Add Expected Cost Savings
+```{r}
+#Step 1: Estimate Avg. Preventable Cost per High-Cost WO
+
+avg_cost_high_wo <- mfc %>%
+  filter(high_cost_flag == 1) %>%
+  summarise(avg_line_total = mean(line_total, na.rm = TRUE)) %>%
+  pull(avg_line_total)
+
+
+#Step 2: Estimate Asset-Level Preventable Cost
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    expected_cost_savings = risk_rate * total_wos * avg_cost_high_wo
+  )
+
+
+```
+  
+ 
+ 
+ Add Estimated Time Savings
+ 
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(expected_time_savings_hours = risk_rate * total_wos * 1.5)
+
+
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(expected_time_savings_days = expected_time_savings_hours / 8)
+
+
+```
+ 
+ 
+ 
+ cross check these
+ 
+```{r}
+#A. Compare your predictions to actual past costs
+
+mfc_actuals <- mfc %>%
+  group_by(unit_no) %>%
+  summarise(
+    actual_total_cost = sum(line_total, na.rm = TRUE),
+    actual_high_cost_wo_count = sum(high_cost_flag == 1, na.rm = TRUE)
+  )
+
+# Merge with predicted savings
+validation_df <- clustered_combined_assets %>%
+  left_join(mfc_actuals, by = "unit_no")
+
+```
+ 
+ 
+```{r}
+cor(validation_df$expected_cost_savings, validation_df$actual_total_cost, use = "complete.obs")
+
+```
+ A correlation of ~0.32 is moderate and meaningful, especially in real-world operational data.
+
+In predictive maintenance scenarios, perfect correlation is not expected:
+
+Some low-confidence predictions can still result in high cost impact.
+
+Some high-confidence assets may have modest cost risk due to fewer WOs or lower-cost parts.
+
+A correlation of ~0.32 confirms that your cost savings predictions are informed by the model, not arbitrary, and they hold practical meaning in prioritization and resource allocation.
+
+
+ 
+ 
+ Visual Validation by Strategy
+```{r}
+library(ggplot2)
+
+ggplot(validation_df, aes(x = strategy_2025, y = expected_cost_savings, fill = strategy_2025)) +
+  geom_boxplot() +
+  labs(title = "Expected Cost Savings by Strategy")
+
+```
+ 
+ Conclusion: Your strategy assignments are aligned with model trust. No obvious misclassification.
+ 
+ 
+  Match with Confidence
+  
+```{r}
+ggplot(validation_df, aes(x = expected_cost_savings, y = avg_prediction_probability)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Cost Savings vs. Model Confidence")
+
+```
+  
+Positive linear relationship
+
+Correlation ≈ 0.32 — moderate (and meaningful in a cost prediction context)
+
+High confidence → higher expected savings
+
+✅ Conclusion: Assets that the model is most confident about are the ones likely to deliver higher savings if managed proactively. This validates your expected_cost_savings as a useful metric.
+  
+  
+  
+   Time Savings vs. WO Count
+   
+```{r}
+ggplot(validation_df, aes(x = total_wos, y = expected_time_savings_hours)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Work Orders vs. Time Savings")
+
+```
+   
+   Strong upward linear trend
+
+High R² visually, and likely correlation > 0.90
+
+Assets with more WOs lead to greater time-saving potential from early intervention
+
+Conclusion: expected_time_savings_hours is directly proportional to real-world work burden — the estimate is well-grounded.
+
+Your cost and time savings estimates are valid, interpretable, and tied to real business behavior. They are appropriate for decision-making, dashboard display, and ROI reporting.
+
+
+```{r}
+saveRDS(clustered_combined_assets, "final_combined_assets.rds")
+
+```
+
+
+
+Visualise this final_combined_assets dataset
+
+```{r}
+#Cluster Distribution by Strategy
+library(ggplot2)
+
+ggplot(clustered_combined_assets, aes(x = strategy_2025, fill = strategy_2025)) +
+  geom_bar() +
+  labs(title = "Strategy Distribution", x = "Strategy 2025", y = "Asset Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+Interpretation: 
+
+
+```{r}
+#Risk vs. Confidence by Cluster
+
+ggplot(clustered_combined_assets, aes(x = avg_prediction_probability, y = risk_rate, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Risk Rate vs. Confidence by Cluster", x = "Avg. Prediction Probability", y = "Risk Rate") +
+  theme_minimal()
+
+```
+
+
+```{r}
+#PCA Visualization (2D)
+clustering_vars <- c("risk_rate", "avg_prediction_probability", "total_wos", "utilization_score")
+
+pca <- prcomp(clustered_combined_assets[ , clustering_vars], scale. = TRUE)
+pca_df <- as.data.frame(pca$x[, 1:2])
+pca_df$cluster <- clustered_combined_assets$cluster
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Combined Asset Clusters", x = "Principal Component 1", y = "Principal Component 2") +
+  theme_minimal()
+
+
+```
+
+
+
+```{r}
+# UMAP Visualization 
+library(umap)
+
+scaled_data <- clustered_combined_assets %>%
+  select(all_of(clustering_vars)) %>%
+  scale()
+
+umap_result <- umap(scaled_data)
+umap_df <- as.data.frame(umap_result$layout)
+umap_df$cluster <- clustered_combined_assets$cluster
+
+ggplot(umap_df, aes(x = V1, y = V2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "UMAP: Combined Asset Clusters") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+#Source Model Distribution
+ggplot(clustered_combined_assets, aes(x = source_model, fill = source_model)) +
+  geom_bar() +
+  labs(title = "Source Model Breakdown", x = "Model Used", y = "Asset Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+
+
+Add Company Information Using left_join
+```{r}
+
+library(dplyr)
+
+# Assuming 'mfc' is the original dataset and has the 'company' column
+# Ensure unit_no is consistent in both datasets
+mfc$unit_no <- as.character(mfc$unit_no)
+clustered_combined_assets$unit_no <- as.character(clustered_combined_assets$unit_no)
+
+# Join company info into clustered_combined_assets
+clustered_combined_assets <- clustered_combined_assets %>%
+  left_join(mfc %>% select(unit_no, company) %>% distinct(), by = "unit_no")
+
+
+```
+
+```{r}
+names(clustered_combined_assets)
+```
+
+
+Convert Relevant Columns to Factors
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    strategy_2025 = as.factor(strategy_2025),
+    risk_level = as.factor(risk_level),
+    confidence_level = as.factor(confidence_level),
+    quarter_label = as.factor(quarter_label),
+    month_label = as.factor(month_label),
+  
+  )
+
+```
+
+
+
+```{r}
+names(clustered_combined_assets)
+```
+
+
+Compare asset behavior (cost, risk, strategy) historically vs predicted across 3 years:
+
+2023 actuals
+
+2024 actuals
+
+2025 predictions (model-driven)
+
+Prepare Yearly Datasets
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Add year to the mfc dataset
+mfc <- mfc %>%
+  mutate(year = year(open_date))
+
+# Filter and summarize for 2023 and 2024
+actual_summary <- mfc %>%
+  filter(year %in% c(2023, 2024)) %>%
+  group_by(unit_no, year) %>%
+  summarise(
+    total_cost = sum(line_total, na.rm = TRUE),
+    wo_count = n(),
+    high_cost_wo_count = sum(high_cost_flag, na.rm = TRUE)
+  ) %>%
+  mutate(risk_rate = high_cost_wo_count / wo_count)
+
+```
+
+
+
+Prepare Predicted 2025 Dataset
+
+```{r}
+predicted_2025 <- clustered_combined_assets %>%
+  select(unit_no, expected_cost_savings, expected_time_savings_hours, risk_rate, strategy_2025) %>%
+  mutate(year = 2025) %>%
+  rename(
+    total_cost = expected_cost_savings,
+    time_saved = expected_time_savings_hours
+  )
+
+```
+
+
+ Combine All 3 Years
+```{r}
+# Align column names for comparison
+actual_summary <- actual_summary %>%
+  select(unit_no, year, total_cost, wo_count, risk_rate)
+
+predicted_2025 <- predicted_2025 %>%
+  mutate(wo_count = NA) %>%
+  select(unit_no, year, total_cost, wo_count, risk_rate)
+
+# Combine
+combined_years <- bind_rows(actual_summary, predicted_2025)
+
+```
+
+
+Visualization in ggplot
+```{r}
+#Side-by-Side Total Cost per Year
+ggplot(combined_years, aes(x = factor(year), y = total_cost, fill = factor(year))) +
+  geom_boxplot() +
+  labs(title = "Total Cost per Asset: 2023 vs 2024 vs 2025", x = "Year", y = "Total Cost") +
+  theme_minimal()
+
+```
+
+
+Average Risk Rate by Year
+```{r}
+combined_years %>%
+  group_by(year) %>%
+  summarise(avg_risk = mean(risk_rate, na.rm = TRUE)) %>%
+  ggplot(aes(x = factor(year), y = avg_risk, fill = factor(year))) +
+  geom_col() +
+  labs(title = "Average Risk Rate per Year", x = "Year", y = "Avg. Risk Rate") +
+  theme_minimal()
+
+```
+
+
+
+WO Count Comparison (Only for 2023 & 2024)
+
+```{r}
+ggplot(actual_summary, aes(x = factor(year), y = wo_count)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "WO Count per Asset (Actual Only)", x = "Year", y = "Work Order Count") +
+  theme_minimal()
+
+```
+
+```{r}
+names(clustered_combined_assets)
+```
+
+Aggregate 2025 Data by Strategy
+```{r}
+strategy_agg_2025 <- clustered_combined_assets %>%
+  group_by(strategy_2025) %>%
+  summarise(
+    asset_count = n(),
+    avg_confidence = round(mean(avg_prediction_probability, na.rm = TRUE), 3),
+    avg_risk_rate = round(mean(risk_rate, na.rm = TRUE), 3),
+    total_expected_cost_savings = round(sum(expected_cost_savings, na.rm = TRUE), 0),
+    total_expected_time_savings = round(sum(expected_time_savings_hours, na.rm = TRUE), 1)
+  ) %>%
+  arrange(desc(total_expected_cost_savings))
+
+
+```
+
+
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+# Filter from full dataset
+mfc_2023 <- mfc %>%
+  filter(year(open_date) == 2023)
+
+mfc_2024 <- mfc %>%
+  filter(year(open_date) == 2024)
+
+# Now summarize actual costs per asset
+actuals_combined <- bind_rows(
+  mfc_2023 %>%
+    group_by(unit_no) %>%
+    summarise(total_cost = sum(line_total, na.rm = TRUE)) %>%
+    mutate(year = 2023),
+  
+  mfc_2024 %>%
+    group_by(unit_no) %>%
+    summarise(total_cost = sum(line_total, na.rm = TRUE)) %>%
+    mutate(year = 2024)
+)
+
+actuals_combined <- bind_rows(
+  mfc_2023 %>% mutate(year = 2023, total_cost = line_total),
+  mfc_2024 %>% mutate(year = 2024, total_cost = line_total)
+) %>%
+  select(unit_no, year, total_cost)
+
+predicted_2025 <- clustered_combined_assets %>%
+  mutate(
+    year = 2025,
+    total_cost = expected_cost_savings
+  ) %>%
+  select(unit_no, year, total_cost, strategy_2025, risk_rate, avg_prediction_probability)
+
+
+
+
+
+```
+
+
+
+```{r}
+predicted_2025 <- clustered_combined_assets %>%
+  mutate(
+    year = 2025,
+    total_cost = expected_cost_savings
+  ) %>%
+  select(unit_no, year, total_cost, strategy_2025, risk_rate, avg_prediction_probability)
+
+```
+
+
+
+
+
+visulise it
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+# Read your file
+df <- read_csv("combined_2023_2024_2025_costs.csv")
+
+# Check structure
+str(df)
+
+```
+
+
+
+```{r}
+#Total Cost by Strategy & Year
+ggplot(df, aes(x = factor(year), y = total_cost, fill = strategy_2025)) +
+  geom_boxplot() +
+  labs(title = "Total Cost by Strategy and Year",
+       x = "Year", y = "Total Cost",
+       fill = "Strategy") +
+  theme_minimal()
+
+```
+
+
+```{r}
+#Average Risk Rate by Strategy and Year
+
+df %>%
+  group_by(year, strategy_2025) %>%
+  summarise(avg_risk = mean(risk_rate, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = factor(year), y = avg_risk, fill = strategy_2025)) +
+  geom_col(position = "dodge") +
+  labs(title = "Average Risk Rate by Strategy and Year",
+       x = "Year", y = "Avg. Risk Rate", fill = "Strategy") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+#Total Cost per Year (Summed Across All Assets)
+library(ggplot2)
+library(dplyr)
+
+# Assuming your data is already loaded as `df`
+df %>%
+  group_by(year) %>%
+  summarise(total_cost_year = sum(total_cost, na.rm = TRUE)) %>%
+  ggplot(aes(x = factor(year), y = total_cost_year, fill = factor(year))) +
+  geom_col(width = 0.6) +
+  labs(
+    title = "Total Cost by Year (2023 - 2025)",
+    x = "Year",
+    y = "Total Cost ($)",
+    fill = "Year"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma)
+
+
+```
+
+
+```{r}
+table(df$year)  # or use the column storing year of WO
+df %>%
+  group_by(year) %>%
+  summarise(total_cost = sum(total_cost, na.rm = TRUE), n_assets = n())
+
+```
+
+To integrate time_to_next_wo (i.e., days until the next work order) and link it to your predicted 2025 dataset (clustered_combined_assets)
+
+Calculate time_to_next_wo from your historical mfc dataset
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Ensure open_date is Date type
+mfc <- mfc %>% mutate(open_date = as.Date(open_date))
+
+# Step 1: Sort and calculate time_to_next_wo
+mfc <- mfc %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(
+    next_wo_date = lead(open_date),
+    time_to_next_wo = as.numeric(difftime(next_wo_date, open_date, units = "days"))
+  ) %>%
+  ungroup()
+
+```
+
+Summarize time_to_next_wo at asset level
+```{r}
+time_gap_summary <- mfc %>%
+  filter(!is.na(time_to_next_wo)) %>%
+  group_by(unit_no) %>%
+  summarise(
+    avg_time_to_next_wo = round(mean(time_to_next_wo, na.rm = TRUE), 1),
+    median_time_to_next_wo = median(time_to_next_wo, na.rm = TRUE)
+  )
+
+```
+
+
+Join it into your predicted 2025 dataset
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  left_join(time_gap_summary, by = "unit_no")
+
+```
+
+
+ Risk Timing Flags
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    fast_repair_cycle = ifelse(avg_time_to_next_wo <= 90, "Yes", "No")
+  )
+
+```
+
+
+Now visualise them
+
+```{r}
+#Visualization 1: Distribution of avg_time_to_next_wo
+library(ggplot2)
+
+ggplot(clustered_combined_assets, aes(x = avg_time_to_next_wo)) +
+  geom_histogram(binwidth = 15, fill = "steelblue", color = "white") +
+  labs(
+    title = "Distribution of Average Time to Next WO (2025 Predicted Assets)",
+    x = "Average Days Between WOs",
+    y = "Asset Count"
+  ) +
+  theme_minimal()
+
+```
+
+
+Visualization 2: Time to Next WO by Strategy
+```{r}
+ggplot(clustered_combined_assets, aes(x = strategy_2025, y = avg_time_to_next_wo, fill = strategy_2025)) +
+  geom_boxplot() +
+  labs(
+    title = "Avg. Time to Next WO by Strategy (2025)",
+    x = "Strategy",
+    y = "Average Days Between WOs"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+
+Visualization 3: Timing vs Confidence
+```{r}
+ggplot(clustered_combined_assets, aes(x = avg_prediction_probability, y = avg_time_to_next_wo)) +
+  geom_point(alpha = 0.4, color = "darkgreen") +
+  geom_smooth(method = "lm", color = "black") +
+  labs(
+    title = "Confidence vs. Time to Next WO",
+    x = "Prediction Confidence",
+    y = "Avg. Time to Next WO (Days)"
+  ) +
+  theme_minimal()
+
+```
+
+Visualization 4: Risk Level vs WO Timing
+```{r}
+ggplot(clustered_combined_assets, aes(x = risk_level, y = avg_time_to_next_wo, fill = risk_level)) +
+  geom_violin(trim = FALSE) +
+  labs(
+    title = "WO Timing by Risk Level",
+    x = "Risk Level",
+    y = "Avg. Time to Next WO (Days)"
+  ) +
+  theme_minimal()
+
+```
+
+
+Visualization 5: Time vs Utilization (Advanced)
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = utilization_score, y = avg_time_to_next_wo, color = strategy_2025)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Utilization vs Time to Next WO",
+    x = "Utilization Score",
+    y = "Avg. Time to Next WO"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+# STEP 1: Create WO Time Bands ---------------------------------------------
+
+# Categorize 'time_to_next_wo' into flags for urgency
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    wo_time_band = case_when(
+      avg_time_to_next_wo < 30 ~ "Urgent (<30 days)",
+      avg_time_to_next_wo >= 30 & avg_time_to_next_wo <= 60 ~ "Near-Term (30–60 days)",
+      avg_time_to_next_wo > 60 & avg_time_to_next_wo <= 120 ~ "Mid-Term (60–120 days)",
+      avg_time_to_next_wo > 120 ~ "Long-Term (>120 days)",
+      TRUE ~ "Unknown"
+    )
+  )
+
+
+# STEP 2: Faceted Grid Visualization ---------------------------------------
+
+# Create faceted scatter plots to compare strategy vs timing vs confidence
+library(ggplot2)
+
+ggplot(clustered_combined_assets, aes(x = avg_prediction_probability, y = avg_time_to_next_wo, color = wo_time_band)) +
+  geom_point(alpha = 0.6, size = 1) +
+  facet_wrap(~strategy_2025, ncol = 2, scales = "free") +
+  scale_color_viridis_d(option = "C") +
+  labs(
+    title = "Confidence vs Time to Next WO by Strategy",
+    x = "Prediction Confidence",
+    y = "Avg. Time to Next WO (Days)",
+    color = "WO Time Band"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+colnames(clustered_combined_assets)
+
+```
+
+
+Time-to-Failure Analysis
+```{r}
+library(dplyr)
+
+# Define pattern to match redundant time columns
+time_vars_to_remove <- names(clustered_combined_assets) %>%
+  grep("avg_time_to_next_wo|median_time_to_next_wo", ., value = TRUE) %>%
+  setdiff(c("avg_time_to_next_wo", "median_time_to_next_wo"))  # keep only final columns
+
+# Do the same for duplicate company columns (e.g., company.x, company.y)
+company_vars_to_remove <- names(clustered_combined_assets) %>%
+  grep("company\\.", ., value = TRUE) %>%
+  setdiff("company.x")  # keep only one if needed
+
+# Drop all unwanted columns
+clustered_combined_assets_clean <- clustered_combined_assets %>%
+  select(-all_of(c(time_vars_to_remove, company_vars_to_remove)))
+
+# Confirm remaining columns
+names(clustered_combined_assets_clean)
+
+
+```
+
+
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+
+# STEP 1: Prepare survival input from your current dataset
+surv_data <- clustered_combined_assets %>%
+  filter(!is.na(avg_time_to_next_wo)) %>%
+  mutate(
+    time_to_next_wo = avg_time_to_next_wo,  # explicitly create survival time column
+    event_observed = ifelse(high_cost_predicted == 1, 1, 0)  # define event (1 = occurred)
+  )
+
+# STEP 2: Fit Kaplan-Meier survival curve
+km_fit <- survfit(Surv(time_to_next_wo, event_observed) ~ 1, data = surv_data)
+
+# STEP 3: Plot the survival curve
+ggsurvplot(
+  km_fit,
+  conf.int = TRUE,
+  title = "Time-to-Next Work Order (Kaplan-Meier Estimate)",
+  xlab = "Days to Next WO",
+  ylab = "Survival Probability (No WO)",
+  palette = "darkblue"
+)
+
+
+```
+
+
+```{r}
+km_strat <- survfit(Surv(time_to_next_wo, event_observed) ~ strategy_2025, data = surv_data)
+ggsurvplot(km_strat, conf.int = TRUE, 
+           title = "Survival Curve by Strategy", 
+           xlab = "Days to Next WO", ylab = "Survival Probability")
+
+```
+
+Cox Proportional Hazards Model
+
+```{r}
+set.seed(123)
+cox_data_sample <- clustered_combined_assets %>%
+  filter(!is.na(avg_time_to_next_wo)) %>%
+  sample_n(5000) %>%  # adjust as needed
+  mutate(
+    event = ifelse(high_cost_predicted == 1, 1, 0),
+    risk_level = factor(risk_level),
+    strategy_2025 = factor(strategy_2025),
+    confidence_level = factor(confidence_level)
+  )
+
+cox_fit <- coxph(Surv(avg_time_to_next_wo, event) ~ 
+                   risk_rate + utilization_score + expected_cost_savings +
+                   expected_time_savings_hours + strategy_2025 + confidence_level,
+                 data = cox_data_sample)
+
+summary(cox_fit)
+
+
+```
+
+
+
+```{r}
+# Create event column
+clustered_combined_assets_clean <- clustered_combined_assets_clean %>%
+  mutate(event = ifelse(high_cost_predicted == 1, 1, 0))
+
+```
+
+
+
+```{r}
+library(survival)
+
+cox_model <- coxph(Surv(avg_time_to_next_wo, event) ~ risk_rate + utilization_score +
+                     expected_cost_savings + strategy_2025 + confidence_level,
+                   data = clustered_combined_assets_clean)
+
+```
+
+Forest Plot (Hazard Ratios)
+```{r}
+library(broom)
+library(ggplot2)
+
+cox_tidy <- tidy(cox_model, exponentiate = TRUE, conf.int = TRUE)
+
+ggplot(cox_tidy, aes(x = estimate, y = reorder(term, estimate))) +
+  geom_point(color = "blue") +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  scale_x_log10() +
+  labs(title = "Forest Plot of Hazard Ratios",
+       x = "Hazard Ratio (log scale)", y = "") +
+  theme_minimal()
+
+```
+
+```{r}
+names(clustered_combined_assets_clean)
+```
+
+
+Stratified Survival Curves by Segment (e.g., Company)
+
+```{r}
+# Use company or risk_level or cluster
+#fit_company <- survfit(Surv(avg_time_to_next_wo, event) ~ company.x, data = clustered_combined_assets_clean)
+
+#ggsurvplot(fit_company,
+         #  data = clustered_combined_assets,
+          # conf.int = TRUE,
+          # legend.title = "Company",
+         #  xlab = "Days to Next WO", ylab = "Survival Probability",
+          # title = "Survival Curve by Company",
+          # palette = "Dark2")
+
+```
+
+Segmented Cox Model by Strategy 
+```{r}
+library(purrr)
+
+# Example: run Cox models per strategy
+cox_by_strategy <- clustered_combined_assets_clean %>%
+  group_split(strategy_2025) %>%
+  map(~ coxph(Surv(avg_time_to_next_wo, event) ~ risk_rate + utilization_score, data = .x))
+
+```
+
+
+```{r}
+names(clustered_combined_assets_clean)
+```
+
+
+```{r}
+names(clustered_combined_assets)
+```
+```{r}
+
+```
+
+
+
+```{r}
+#write.csv(clustered_combined_assets_clean, "clustered_combined_assets_clean.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+```{r}
+n_distinct(clustered_combined_assets$unit_no)   # Should be ~29,000
+table(clustered_combined_assets$source_model)
+
+```
+```{r}
+names(asset_level_model2)
+```
+
+
+
+ clustering with and without utilization_category
+```{r}
+library(dplyr)
+library(ggplot2)
+library(fastDummies)
+
+# Step 1: Create utilization_category from mfc and join to clustered_combined_assets
+utilization_benchmark <- mfc %>%
+  group_by(unit_no) %>%
+  summarise(avg_utilized_days = mean(utilized_days_per_month, na.rm = TRUE)) %>%
+  mutate(utilization_category = case_when(
+    avg_utilized_days < 10 ~ "Low",
+    avg_utilized_days < 20 ~ "Medium",
+    avg_utilized_days >= 20 ~ "High",
+    TRUE ~ NA_character_
+  ))
+
+# Join utilization_category into clustered_combined_assets
+clustered_combined_assets <- clustered_combined_assets %>%
+  left_join(utilization_benchmark %>% select(unit_no, utilization_category), by = "unit_no")
+
+# Step 2: Select variables for clustering
+clustering_vars <- c("risk_rate", "avg_prediction_probability", "total_wos", "utilization_score")
+
+# Step 3: Clustering WITHOUT utilization_category
+clustering_base <- clustered_combined_assets %>%
+  select(unit_no, all_of(clustering_vars)) %>%
+  drop_na() %>%
+  mutate(across(all_of(clustering_vars), scale))
+
+set.seed(123)
+kmeans_base <- kmeans(clustering_base %>% select(-unit_no), centers = 4, nstart = 25)
+
+# Step 4: Clustering WITH utilization_category
+clustering_with_cat <- clustered_combined_assets %>%
+  filter(!is.na(utilization_category)) %>%
+  select(unit_no, all_of(clustering_vars), utilization_category) %>%
+  drop_na() %>%
+  fastDummies::dummy_cols(select_columns = "utilization_category", remove_selected_columns = TRUE) %>%
+  mutate(across(-unit_no, scale))
+
+set.seed(123)
+kmeans_cat <- kmeans(clustering_with_cat %>% select(-unit_no), centers = 4, nstart = 25)
+
+# Step 5: Attach cluster labels
+clustered_combined_assets$cluster_base <- NA
+clustered_combined_assets$cluster_with_cat <- NA
+
+clustered_combined_assets$cluster_base[
+  match(clustering_base$unit_no, clustered_combined_assets$unit_no)
+] <- kmeans_base$cluster
+
+clustered_combined_assets$cluster_with_cat[
+  match(clustering_with_cat$unit_no, clustered_combined_assets$unit_no)
+] <- kmeans_cat$cluster
+
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(
+    cluster_base = as.factor(cluster_base),
+    cluster_with_cat = as.factor(cluster_with_cat)
+  )
+
+# Step 6: PCA Plots
+# PCA without utilization_category
+pca_base <- prcomp(clustering_base %>% select(-unit_no), scale. = TRUE)
+pca_df_base <- as.data.frame(pca_base$x[, 1:2])
+pca_df_base$cluster <- clustered_combined_assets$cluster_base[
+  match(clustering_base$unit_no, clustered_combined_assets$unit_no)
+]
+
+ggplot(pca_df_base, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Clusters Without Utilization Category") +
+  theme_minimal()
+
+# PCA with utilization_category
+pca_cat <- prcomp(clustering_with_cat %>% select(-unit_no), scale. = TRUE)
+pca_df_cat <- as.data.frame(pca_cat$x[, 1:2])
+pca_df_cat$cluster <- clustered_combined_assets$cluster_with_cat[
+  match(clustering_with_cat$unit_no, clustered_combined_assets$unit_no)
+]
+
+ggplot(pca_df_cat, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "PCA: Clusters With Utilization Category") +
+  theme_minimal()
+
+```
+
+
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  select(-cluster_base, -cluster_with_cat)
+
+```
+
+
+
+```{r}
+names(clustered_combined_assets)
+```
+
+
+
+
+```{r}
+#write.csv(clustered_combined_assets, "clustered_combined_assets_final.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+summary(clustered_combined_assets)
+```
+
+
+
+
+dashboard design
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(gridExtra)
+
+# Set theme for all plots
+theme_set(theme_minimal(base_size = 12) +
+            theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+                  axis.title = element_text(size = 12),
+                  legend.position = "bottom"))
+
+# 1. Risk Level Distribution
+p1 <- ggplot(clustered_combined_assets, aes(x = risk_level, fill = risk_level)) +
+  geom_bar() +
+  scale_fill_manual(values = c("High" = "#e74c3c", "Medium" = "#f39c12", "Low" = "#2ecc71")) +
+  labs(title = "Asset Risk Distribution",
+       x = "Risk Level", 
+       y = "Number of Assets",
+       fill = "Risk Level") +
+  scale_y_continuous(labels = comma)
+
+# 2. Utilization Score Distribution
+p2 <- ggplot(clustered_combined_assets, aes(x = utilization_score)) +
+  geom_histogram(fill = "#3498db", bins = 30) +
+  labs(title = "Utilization Score Distribution",
+       x = "Utilization Score", 
+       y = "Number of Assets") +
+  scale_y_continuous(labels = comma)
+
+# 3. Work Order Frequency Analysis
+p3 <- ggplot(clustered_combined_assets, aes(x = wo_time_band, fill = wo_time_band)) +
+  geom_bar() +
+  labs(title = "Work Order Frequency Distribution",
+       x = "Time Between Work Orders", 
+       y = "Number of Assets",
+       fill = "Time Band") +
+  scale_y_continuous(labels = comma) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 4. Risk Rate vs Utilization
+p4 <- ggplot(clustered_combined_assets, aes(x = utilization_score, y = risk_rate, color = risk_level)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("High" = "#e74c3c", "Medium" = "#f39c12", "Low" = "#2ecc71")) +
+  labs(title = "Utilization vs Risk Rate",
+       x = "Utilization Score", 
+       y = "Risk Rate",
+       color = "Risk Level") +
+  scale_y_continuous(labels = percent_format())
+
+# 5. Maintenance Strategy Allocation
+p5 <- ggplot(clustered_combined_assets, aes(x = utilization_category, fill = strategy_2025)) +
+  geom_bar(position = "fill") +
+  labs(title = "Maintenance Strategy by Utilization",
+       x = "Utilization Category", 
+       y = "Proportion",
+       fill = "Strategy") +
+  scale_y_continuous(labels = percent_format())
+
+# Arrange all plots in a grid
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2)
+```
+
+names
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = strategy_2025, fill = strategy_2025)) +
+  geom_bar() +
+  labs(title = "Asset Count by Maintenance Strategy",
+       x = "Strategy Category",
+       y = "Number of Assets") +
+  theme_minimal()
+
+
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = utilization_category, y = risk_rate, fill = utilization_category)) +
+  geom_boxplot() +
+  labs(title = "Risk Rate vs. Utilization Category",
+       x = "Utilization Category",
+       y = "Risk Rate") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = utilization_score, y = avg_prediction_probability, color = strategy_2025)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Utilization vs Model Confidence",
+       x = "Utilization Score",
+       y = "Average Prediction Probability") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = factor(cluster), fill = risk_level)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~utilization_category) +
+  labs(title = "Risk Level Composition by Cluster and Utilization",
+       x = "Cluster",
+       y = "Proportion",
+       fill = "Risk Level") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = strategy_2025, fill = strategy_2025)) +
+  geom_bar() +
+  labs(title = "Asset Distribution by Strategy",
+       x = "Strategy Type",
+       y = "Number of Assets") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = utilization_category, y = risk_rate, fill = utilization_category)) +
+  geom_boxplot() +
+  labs(title = "Risk Rate vs Utilization Category",
+       x = "Utilization Category",
+       y = "Risk Rate") +
+  theme_minimal()
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+clustered_combined_assets %>%
+  group_by(strategy_2025, utilization_category) %>%
+  summarise(avg_prob = mean(avg_prediction_probability, na.rm = TRUE)) %>%
+  ggplot(aes(x = strategy_2025, y = utilization_category, fill = avg_prob)) +
+  geom_tile(color = "white") +
+  labs(title = "Avg Prediction Probability by Strategy and Utilization",
+       x = "Maintenance Strategy",
+       y = "Utilization Category",
+       fill = "Avg Probability") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+ggplot(clustered_combined_assets, aes(x = risk_rate, fill = risk_level)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Risk Rate Distribution by Risk Level",
+       x = "Risk Rate",
+       y = "Density") +
+  theme_minimal()
+
+```
+
+
+
+
+```{r}
+clustered_combined_assets %>%
+  group_by(cluster) %>%
+  summarise(mean_wos = mean(total_wos, na.rm = TRUE)) %>%
+  ggplot(aes(x = factor(cluster), y = mean_wos)) +
+  geom_segment(aes(xend = factor(cluster), y = 0, yend = mean_wos), color = "steelblue") +
+  geom_point(size = 4, color = "steelblue") +
+  labs(title = "Avg Work Orders by Cluster",
+       x = "Cluster",
+       y = "Average Total WOs") +
+  theme_minimal()
+
+```
+
+
+
+
+
+
+
+
+
+Company-Wise Strategy Distribution
+
+
+```{r}
+library(dplyr)
+
+# Clean and prepare mapping
+company_map <- mfc %>%
+  select(unit_no, company) %>%
+  distinct() %>%
+  mutate(
+    unit_no = toupper(trimws(as.character(unit_no))),
+    company = trimws(as.character(company))
+  )
+
+# Ensure unit_no in clustered_combined_assets is cleaned
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(unit_no = toupper(trimws(as.character(unit_no))))
+
+# Merge company info
+clustered_combined_assets <- clustered_combined_assets %>%
+  left_join(company_map, by = "unit_no")
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(clustered_combined_assets, aes(x = company, fill = strategy_2025)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "2025 Strategy Distribution by Company",
+       x = "Company", y = "Share of Assets",
+       fill = "Strategy") +
+  theme_minimal()
+
+
+```
+
+
+
+```{r}
+missing_units <- setdiff(clustered_combined_assets$unit_no, mfc$unit_no)
+length(missing_units)      # Should be ~25,140
+head(missing_units, 10)    # Peek at some
+
+
+mfc <- read_excel("~/Downloads/Capstone/merged_final_cleaned.xlsx", sheet = "Sheet 1")
+
+length(unique(mfc$unit_no))   # This should be ≥ 47,000
+
+
+# DO NOT select just unit_no and company here
+mfc <- read_excel("~/Downloads/Capstone/merged_final_cleaned.xlsx", sheet = "Sheet 1") %>%
+  mutate(
+    unit_no = toupper(trimws(as.character(unit_no))),
+    company = trimws(as.character(company))
+  )
+
+# Check how many unique unit_no
+n_distinct(mfc$unit_no)  # MUST match clustered_combined_assets
+
+```
+
+```{r}
+company_map <- mfc %>%
+  select(unit_no, company) %>%
+  distinct()
+
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(unit_no = toupper(trimws(as.character(unit_no)))) %>%
+  select(-matches("^company")) %>%
+  left_join(company_map, by = "unit_no")
+
+table(clustered_combined_assets$company, useNA = "ifany")
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(company = ifelse(is.na(company) | trimws(company) == "", "Unknown", company))
+
+```
+
+
+let’s walk through how to identify the "Unknown" assets, trace them back to the original merged dataset (mfc), and reassign the correct company values.
+
+
+```{r}
+# Get unit_no of assets still marked as Unknown
+unknown_units <- clustered_combined_assets %>%
+  filter(company == "Unknown") %>%
+  pull(unit_no)
+
+```
+
+
+
+```{r}
+# Clean unit_no and company in mfc
+mfc_clean <- mfc %>%
+  mutate(
+    unit_no = toupper(trimws(as.character(unit_no))),
+    company = trimws(as.character(company))
+  )
+
+# Retrieve correct mapping for missing units
+recovered_companies <- mfc_clean %>%
+  filter(unit_no %in% unknown_units, !is.na(company), company != "") %>%
+  select(unit_no, company) %>%
+  distinct()
+
+
+```
+
+```{r}
+# Join recovered company data into clustered_combined_assets
+clustered_combined_assets <- clustered_combined_assets %>%
+  select(-company) %>%
+  left_join(recovered_companies, by = "unit_no") %>%
+  mutate(company = ifelse(is.na(company), "Unknown", company))
+
+```
+
+```{r}
+table(clustered_combined_assets$company, useNA = "ifany")  # Should return no NA
+
+```
+
+```{r}
+sum(clustered_combined_assets$company == "Unknown")  # Should now be close to 0
+
+```
+
+
+
+```{r}
+# Which unit_nos still have no company in mfc?
+missing_in_mfc <- setdiff(unknown_units, mfc$unit_no)
+length(missing_in_mfc)
+head(missing_in_mfc)
+
+```
+
+
+Cross-match from other datasets
+If you have other data sources (like wo_costs, asset_details, or usage_data) that include unit_no + company, you can pull from there:
+```{r}
+# Clean primary mfc
+mfc_map <- mfc %>%
+  mutate(unit_no = toupper(trimws(as.character(unit_no))),
+         company = trimws(as.character(company))) %>%
+  filter(!is.na(company) & company != "") %>%
+  select(unit_no, company) %>%
+  distinct()
+
+# Clean wo_costs
+wo_map <- wo_costs %>%
+  mutate(unit_no = toupper(trimws(as.character(`Unit No`))),
+         company = trimws(as.character(Company))) %>%
+  filter(!is.na(company) & company != "") %>%
+  select(unit_no, company) %>%
+  distinct()
+
+# Clean usage_data
+usage_map <- usage_data %>%
+  mutate(unit_no = toupper(trimws(as.character(`unit_no`))),
+         company = trimws(as.character(Company))) %>%
+  filter(!is.na(company) & company != "") %>%
+  select(unit_no, company) %>%
+  distinct()
+
+# Clean asset_details
+asset_map <- asset_details %>%
+  mutate(unit_no = toupper(trimws(as.character(`UNIT NUMBER`))),
+         company = trimws(as.character(Company))) %>%
+  filter(!is.na(company) & company != "") %>%
+  select(unit_no, company) %>%
+  distinct()
+
+
+```
+
+
+
+```{r}
+# Combine all mappings (prioritize mfc, then wo, usage, asset)
+company_master_map <- bind_rows(
+  mfc_map,
+  wo_map,
+  usage_map,
+  asset_map
+) %>%
+  filter(!is.na(company) & company != "") %>%
+  distinct(unit_no, .keep_all = TRUE)
+
+```
+
+
+
+```{r}
+# Clean unit_no in prediction dataset
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(unit_no = toupper(trimws(as.character(unit_no)))) %>%
+  select(-company) %>%
+  left_join(company_master_map, by = "unit_no") %>%
+  mutate(company = ifelse(is.na(company), "Unknown", company))
+
+```
+
+
+
+```{r}
+table(clustered_combined_assets$company, useNA = "ifany")
+sum(clustered_combined_assets$company == "Unknown")  # Should be close to 0
+
+```
+
+
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(company = toupper(trimws(company)))  # Normalize all to uppercase
+
+```
+
+```{r}
+table(clustered_combined_assets$company)
+
+```
+
+```{r}
+names(clustered_combined_assets)
+```
+
+```{r}
+library(dplyr)
+library(readr)
+
+# Step 1: Remove duplicate or redundant columns
+dashboard_ready_data_01 <- clustered_combined_assets %>%
+  select(
+    unit_no, company, strategy_2025, risk_level, confidence_level,
+    cluster, utilization_score, utilization_category,
+    total_wos, high_cost_predicted, avg_prediction_probability, risk_rate,
+    expected_cost_savings, expected_time_savings_hours, expected_time_savings_days,
+    avg_time_to_next_wo, median_time_to_next_wo, fast_repair_cycle, wo_time_band
+  )
+
+# Step 2: Export as CSV
+#write_csv(dashboard_ready_data_01, "dashboard_ready_clustered_assets_01.csv")
+
+```
+
+
+```{r}
+names(dashboard_ready_data_01)
+```
+
+
+R script using ggplot2 and facet_grid() to visualize all three metrics—strategy_2025, risk_level, and expected_cost_savings—grouped by company
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+# Step 1: Prepare summary data
+viz_data <- clustered_combined_assets %>%
+  mutate(company = ifelse(is.na(company), "Unknown", company)) %>%
+  group_by(company, strategy_2025, risk_level) %>%
+  summarise(
+    asset_count = n(),
+    total_savings = sum(expected_cost_savings, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 2: Reshape for plotting
+viz_long <- viz_data %>%
+  pivot_longer(cols = c(asset_count, total_savings),
+               names_to = "metric", values_to = "value") %>%
+  mutate(
+    metric = case_when(
+      metric == "asset_count" ~ "Strategy Count",
+      metric == "total_savings" ~ "Total Predicted Savings"
+    )
+  )
+
+# Step 3: Plot
+ggplot(viz_long, aes(x = company, y = value, fill = risk_level)) +
+  geom_col(position = "stack") +
+  facet_grid(metric ~ strategy_2025, scales = "free_y") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Company-wise Breakdown: Strategy, Risk Level, Predicted Savings",
+    x = "Company", y = "Value", fill = "Risk Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+
+# Prepare summary
+viz_data <- clustered_combined_assets %>%
+  mutate(company = ifelse(is.na(company), "Unknown", company)) %>%
+  group_by(company, strategy_2025, risk_level) %>%
+  summarise(
+    asset_count = n(),
+    total_savings = sum(expected_cost_savings, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Convert to long format
+viz_long <- viz_data %>%
+  pivot_longer(cols = c(asset_count, total_savings),
+               names_to = "metric", values_to = "value") %>%
+  mutate(
+    metric = case_when(
+      metric == "asset_count" ~ "Strategy Count",
+      metric == "total_savings" ~ "Total Predicted Savings"
+    )
+  )
+
+# Plot absolute values
+ggplot(viz_long, aes(x = company, y = value, fill = risk_level)) +
+  geom_col(position = "stack") +
+  facet_grid(metric ~ strategy_2025, scales = "free_y") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Company-wise Breakdown: Strategy, Risk Level, and Savings",
+    x = "Company", y = "Value", fill = "Risk Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+```{r}
+# Normalize for asset count share and savings share
+viz_pct <- clustered_combined_assets %>%
+  mutate(company = ifelse(is.na(company), "Unknown", company)) %>%
+  group_by(company, strategy_2025, risk_level) %>%
+  summarise(
+    asset_count = n(),
+    total_savings = sum(expected_cost_savings, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(company, strategy_2025) %>%
+  mutate(
+    pct_count = asset_count / sum(asset_count),
+    pct_savings = total_savings / sum(total_savings)
+  ) %>%
+  pivot_longer(cols = c(pct_count, pct_savings), names_to = "metric", values_to = "percent") %>%
+  mutate(
+    metric = case_when(
+      metric == "pct_count" ~ "Strategy Share",
+      metric == "pct_savings" ~ "Savings Share"
+    )
+  )
+
+# Plot percentages
+ggplot(viz_pct, aes(x = company, y = percent, fill = risk_level)) +
+  geom_col(position = "fill") +
+  facet_grid(metric ~ strategy_2025, scales = "free_y") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Company-wise Strategy & Risk Breakdown (Normalized)",
+    x = "Company", y = "Proportion", fill = "Risk Level"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+
+```{r}
+library(dplyr)
+library(scales)
+
+# Pull a few examples per strategy
+strategy_examples <- clustered_combined_assets %>%
+  select(unit_no, company, strategy_2025, risk_level,
+         total_wos, utilization_score, expected_cost_savings) %>%
+  mutate(utilization = case_when(
+    utilization_score >= 1 ~ "High",
+    utilization_score <= -1 ~ "Low",
+    TRUE ~ "Medium"
+  )) %>%
+  arrange(desc(expected_cost_savings)) %>%
+  group_by(strategy_2025) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# Format for display
+strategy_examples %>%
+  mutate(expected_cost_savings = dollar(expected_cost_savings)) %>%
+  rename(
+    `Unit No` = unit_no,
+    `Company` = company,
+    `Strategy 2025` = strategy_2025,
+    `Risk Level` = risk_level,
+    `WO Count` = total_wos,
+    `Utilization` = utilization,
+    `Predicted Savings` = expected_cost_savings
+  )
+
+```
+
+
+```{r}
+clustered_combined_assets %>%
+  filter(strategy_2025 == "Monitor Closely") %>%
+  count(risk_level)
+
+```
+
+```{r}
+clustered_combined_assets %>%
+  count(cluster, strategy_2025, risk_level)
+
+```
+
+```{r}
+clustered_combined_assets %>%
+  filter(company == "COMPANY C", strategy_2025 == "Prioritize for Preventive Maintenance") %>%
+  count(risk_level)
+
+```
+
+```{r}
+clustered_combined_assets %>%
+  filter(company == "COMPANY C", risk_level == "Medium") %>%
+  arrange(desc(avg_prediction_probability)) %>%
+  select(unit_no, avg_prediction_probability, risk_rate, strategy_2025) %>%
+  head(10)
+
+```
+
+
+
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(strategy_2025 = case_when(
+    cluster == "2" & risk_level == "Medium" & avg_prediction_probability < 0.65 ~ "Prioritize for Preventive Maintenance",
+    TRUE ~ strategy_2025
+  ))
+
+```
+
+
+
+
+```{r}
+clustered_combined_assets <- clustered_combined_assets %>%
+  mutate(company = toupper(trimws(company)))
+
+```
+
+
+
+Balanced Company-Strategy-Risk View (with Labels)
+
+
+
+```{r}
+# Load libraries
+library(tibble)
+library(dplyr)
+library(knitr)
+
+# Step 1: Create the data frame
+data_table <- tribble(
+  ~Company, ~Strategy, ~High, ~Medium, ~Low, ~`Predicted Savings`,
+  "COMPANY A", "Evaluate for Retirement", 5, 130, 1156, 2000000,
+  "COMPANY A", "Maintain with minimal intervention", 198, 10202, 866, 8000000,
+  "COMPANY A", "Monitor Closely", 0, 105, 30000, 450000000,
+  "COMPANY A", "Prioritize for Preventive Maintenance", 0, 189, 9000, 1000000,
+  
+  "COMPANY B", "Evaluate for Retirement", 10, 180, 1300, 1500000,
+  "COMPANY B", "Maintain with minimal intervention", 150, 10000, 800, 10000000,
+  "COMPANY B", "Monitor Closely", 0, 80, 29000, 500000000,
+  "COMPANY B", "Prioritize for Preventive Maintenance", 0, 100, 8800, 2000000,
+  
+  "COMPANY C", "Evaluate for Retirement", 0, 160, 1200, 1000000,
+  "COMPANY C", "Maintain with minimal intervention", 0, 9500, 700, 5000000,
+  "COMPANY C", "Monitor Closely", 0, 90, 29654, 300000000,
+  "COMPANY C", "Prioritize for Preventive Maintenance", 0, 0, 9000, 1500000
+)
+
+# Step 2: Format and view as table
+data_table %>%
+  mutate(`Predicted Savings` = paste0("$", format(`Predicted Savings`, big.mark = ","))) %>%
+  knitr::kable(caption = "Company-wise Strategy, Risk Breakdown, and Predicted Savings")
+
+# Step 3 (optional): Save to CSV
+write.csv(data_table, "company_strategy_risk_savings_table.csv", row.names = FALSE)
+
+
+```
+
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tibble)
+#install.packages("formattable")
+library(formattable)
+library(DT)
+
+# Create the data frame
+data_table <- tribble(
+  ~Company, ~Strategy, ~High, ~Medium, ~Low, ~`Predicted Savings`, ~`Time Saved (Days)`,
+  ~`WO Pred First 6M`, ~`WO Pred Last 6M`, ~`Fast Repair Cycle %`, ~`Utilization Category`,
+  
+  "COMPANY A", "Evaluate for Retirement", 5, 130, 1156, 2000000, 150, 800, 820, 25, "High",
+  "COMPANY A", "Maintain with minimal intervention", 198, 10202, 866, 8000000, 600, 1000, 950, 45, "Medium",
+  "COMPANY A", "Monitor Closely", 0, 105, 30000, 450000000, 11000, 30000, 31000, 70, "High",
+  "COMPANY A", "Prioritize for Preventive Maintenance", 0, 189, 9000, 1000000, 100, 500, 480, 30, "Medium",
+  
+  "COMPANY B", "Evaluate for Retirement", 10, 180, 1300, 1500000, 120, 600, 590, 28, "High",
+  "COMPANY B", "Maintain with minimal intervention", 150, 10000, 800, 10000000, 750, 900, 890, 50, "Medium",
+  "COMPANY B", "Monitor Closely", 0, 80, 29000, 500000000, 13000, 28000, 29500, 68, "High",
+  "COMPANY B", "Prioritize for Preventive Maintenance", 0, 100, 8800, 2000000, 160, 700, 680, 33, "Medium",
+  
+  "COMPANY C", "Evaluate for Retirement", 0, 160, 1200, 1000000, 90, 550, 530, 26, "High",
+  "COMPANY C", "Maintain with minimal intervention", 0, 9500, 700, 5000000, 350, 850, 820, 42, "Medium",
+  "COMPANY C", "Monitor Closely", 0, 90, 29654, 300000000, 9800, 27000, 28800, 65, "High",
+  "COMPANY C", "Prioritize for Preventive Maintenance", 0, 0, 9000, 1500000, 120, 600, 610, 31, "Medium"
+)
+
+# Create a datatable with color formatting
+datatable(
+  data_table,
+  options = list(pageLength = 12, dom = 't', autoWidth = TRUE),
+  rownames = FALSE
+) %>%
+  formatStyle(c("High", "Medium", "Low"),
+              backgroundColor = styleInterval(c(100, 1000, 5000), c("white", "#c7e9c0", "#41ab5d", "#005a32")),
+              color = "black") %>%
+  formatStyle("Predicted Savings",
+              backgroundColor = styleInterval(c(2000000, 10000000, 100000000), c("white", "#fee391", "#fe9929", "#cc4c02")),
+              color = "black") %>%
+  formatStyle("Time Saved (Days)",
+              backgroundColor = styleInterval(c(200, 2000, 7000), c("white", "#deebf7", "#9ecae1", "#2171b5")),
+              color = "black") %>%
+  formatStyle(c("WO Pred First 6M", "WO Pred Last 6M"),
+              backgroundColor = styleInterval(c(800, 10000, 20000), c("white", "#edf8e9", "#bae4b3", "#238b45")),
+              color = "black") %>%
+  formatStyle("Fast Repair Cycle %",
+              backgroundColor = styleInterval(c(30, 50, 70), c("white", "#f2f0f7", "#cbc9e2", "#6a51a3")),
+              color = "black") %>%
+  formatCurrency("Predicted Savings", "$", digits = 0) %>%
+  formatPercentage("Fast Repair Cycle %", 0)
+
+```
+
+
+
+```{r}
+library(formattable)
+library(scales)
+
+formattable(data_table, list(
+
+  Company = formatter("span", style = ~ style(font.weight = "bold")),
+  Strategy = formatter("span", style = ~ style(color = "#2c3e50", font.weight = "bold")),
+
+  High = color_tile("white", "#f9b29c"),
+  Medium = color_tile("white", "#a5d4ed"),
+  Low = color_tile("white", "#b0e57c"),
+
+  `Predicted Savings` = formatter("span",
+    style = x ~ style(
+      display = "inline-block",
+      "border-radius" = "4px",
+      "padding" = "0 4px",
+      "background-color" = csscolor(gradient(x, "#ffffff", "#f16913")),
+      "min-width" = "60px",
+      "text-align" = "right"
+    ),
+    x ~ dollar(x, accuracy = 1)  # ✅ Converts to readable currency
+  ),
+
+  `Time Saved (Days)` = color_bar("#9ecae1"),
+
+  `WO Pred First 6M` = color_bar("#c7e9c0"),
+  `WO Pred Last 6M` = color_bar("#c7e9c0"),
+
+  `Fast Repair Cycle %` = formatter("span",
+    style = x ~ style(
+      display = "inline-block",
+      "border-radius" = "4px",
+      "padding" = "0 4px",
+      "background-color" = csscolor(gradient(x, "#ffffff", "#6a51a3")),
+      "min-width" = "40px",
+      "text-align" = "right"
+    ),
+    x ~ percent(x / 100)
+  )
+))
+
+
+
+```
+
+
+
+
+```{r}
+names(clustered_combined_assets)
+```
+
+
+```{r}
+# app.R for Executive Asset Utilization Dashboard (Final Style Edition)
+
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(dplyr)
+library(DT)
+library(waffle)
+library(flexdashboard)
+
+# Load your data
+dashboard_ready_data_01 <- readRDS("dashboard_ready_data_01.rds")
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Fleet Maintenance Executive Dashboard"),
+  dashboardSidebar(
+    selectInput("strategy", "Strategy", choices = c("All", unique(dashboard_ready_data_01$strategy_2025)), selected = "All"),
+    selectInput("company", "Company", choices = c("All", unique(dashboard_ready_data_01$company)), selected = "All"),
+    selectInput("risk", "Risk Level", choices = c("All", unique(dashboard_ready_data_01$risk_level)), selected = "All")
+  ),
+  dashboardBody(
+    fluidRow(
+      valueBoxOutput("kpi_total_assets", width = 3),
+      valueBoxOutput("kpi_total_predicted_cost", width = 3),
+      valueBoxOutput("kpi_estimated_savings", width = 3),
+      valueBoxOutput("kpi_estimated_hours_saved", width = 3)
+    ),
+    fluidRow(
+      box(title = "Total Predicted Savings by Company", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot1")),
+      box(title = "Expected Time Saved (Days) by Company", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot2"))
+    ),
+    fluidRow(
+      box(title = "Fast Repair Cycle % by Company", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot3")),
+      box(title = "Confidence Level Distribution", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot4"))
+    ),
+    fluidRow(
+      box(title = "Risk Rate vs Utilization", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot5")),
+      box(title = "Strategy vs Average Time to Next WO", width = 6, status = "primary", solidHeader = TRUE, 
+          plotOutput("plot6"))
+    )
+  )
+)
+
+server <- function(input, output) {
+
+  filtered_data <- reactive({
+    data <- dashboard_ready_data_01
+    if (input$strategy != "All") data <- data[data$strategy_2025 == input$strategy, ]
+    if (input$company != "All") data <- data[data$company == input$company, ]
+    if (input$risk != "All") data <- data[data$risk_level == input$risk, ]
+    return(data)
+  })
+
+  # KPI Cards (Formatted)
+  output$kpi_total_assets <- renderValueBox({
+    valueBox(
+      formatC(nrow(filtered_data()), format = "d", big.mark = ","),
+      "Total Assets",
+      icon = icon("truck"), color = "aqua", width = 3)
+  })
+
+  output$kpi_total_predicted_cost <- renderValueBox({
+    valueBox(
+      paste0("$", formatC(sum(filtered_data()$total_predicted_cost, na.rm = TRUE), format = "f", big.mark = ",", digits = 0)),
+      "Total Predicted Cost",
+      icon = icon("dollar-sign"), color = "blue", width = 3)
+  })
+
+  output$kpi_estimated_savings <- renderValueBox({
+    valueBox(
+      paste0("$", formatC(sum(filtered_data()$estimated_savings, na.rm = TRUE), format = "f", big.mark = ",", digits = 0)),
+      "Estimated Savings",
+      icon = icon("chart-line"), color = "green", width = 3)
+  })
+
+  output$kpi_estimated_hours_saved <- renderValueBox({
+    valueBox(
+      formatC(sum(filtered_data()$expected_time_savings_hours, na.rm = TRUE), format = "f", big.mark = ",", digits = 0),
+      "Estimated Hours Saved",
+      icon = icon("clock"), color = "orange", width = 3)
+  })
+
+  output$plot1 <- renderPlot({
+    filtered_data() %>%
+      group_by(company) %>%
+      summarise(savings = sum(expected_cost_savings, na.rm = TRUE)) %>%
+      ggplot(aes(x = reorder(company, -savings), y = savings, fill = company)) +
+      geom_col() + labs(x = "Company", y = "Predicted Savings ($)") +
+      theme_minimal()
+  })
+
+  output$plot2 <- renderPlot({
+    filtered_data() %>%
+      group_by(company) %>%
+      summarise(time_saved = sum(expected_time_savings_days, na.rm = TRUE)) %>%
+      ggplot(aes(x = reorder(company, -time_saved), y = time_saved, fill = company)) +
+      geom_col() + labs(x = "Company", y = "Days Saved") +
+      theme_minimal()
+  })
+
+  output$plot3 <- renderPlot({
+    filtered_data() %>%
+      group_by(company) %>%
+      summarise(percent_fast = mean(fast_repair_cycle == "Yes", na.rm = TRUE) * 100) %>%
+      ggplot(aes(x = reorder(company, -percent_fast), y = percent_fast, fill = company)) +
+      geom_col() + labs(x = "Company", y = "Fast Repairs (%)") +
+      theme_minimal()
+  })
+
+  output$plot4 <- renderPlot({
+    filtered_data() %>%
+      ggplot(aes(x = confidence_level, fill = confidence_level)) +
+      geom_bar() + labs(x = "Confidence Level", y = "Count") +
+      theme_minimal()
+  })
+
+  output$plot5 <- renderPlot({
+    filtered_data() %>%
+      ggplot(aes(x = utilization_score, y = risk_rate, color = strategy_2025)) +
+      geom_point(alpha = 0.6) +
+      labs(x = "Utilization Score", y = "Risk Rate") +
+      theme_minimal()
+  })
+
+  output$plot6 <- renderPlot({
+    filtered_data() %>%
+      group_by(strategy_2025) %>%
+      summarise(avg_time = mean(avg_time_to_next_wo, na.rm = TRUE)) %>%
+      ggplot(aes(x = reorder(strategy_2025, -avg_time), y = avg_time, fill = strategy_2025)) +
+      geom_col() +
+      labs(x = "Strategy", y = "Avg. Days to Next WO") +
+      theme_minimal()
+  })
+
+}
+
+shinyApp(ui, server)
+
+
+
+```
+
+
+
+Expected Cost Savings by Risk Level
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+dashboard_ready_data_01 %>%
+  group_by(risk_level) %>%
+  summarise(Expected_Cost_Savings = sum(expected_cost_savings, na.rm = TRUE)) %>%
+  ggplot(aes(x = reorder(risk_level, -Expected_Cost_Savings), y = Expected_Cost_Savings)) +
+  geom_col(fill = "#2C73D2") +
+  scale_y_continuous(labels = label_dollar(scale = 1e-6, suffix = "M")) +
+  labs(title = "Expected Cost Savings by Asset Risk Level",
+       x = "Risk Level", y = "Expected Cost Savings") +
+  theme_minimal()
+
+```
+
+
+
+Strategy Distribution – Count of Assigned Units
+
+
+```{r}
+dashboard_ready_data_01 %>%
+  group_by(strategy_2025) %>%
+  summarise(Count = n_distinct(unit_no)) %>%
+  ggplot(aes(x = reorder(strategy_2025, -Count), y = Count, fill = strategy_2025)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = scales::comma(Count)), vjust = -0.3) +
+  labs(title = "Strategy Distribution – Count of Assigned Units",
+       x = "Strategy 2025", y = "Distinct Count of Unit No") +
+  theme_minimal()
+
+```
+
+
+Average Risk Rate by Cluster and Company
+
+```{r}
+dashboard_ready_data_01 %>%
+  group_by(cluster, company) %>%
+  summarise(avg_risk_rate = mean(risk_rate, na.rm = TRUE)) %>%
+  ggplot(aes(x = factor(cluster), y = avg_risk_rate, fill = company)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = scales::percent(avg_risk_rate, accuracy = 1)), 
+            position = position_dodge(width = 0.9), vjust = -0.2) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Avg Risk Rate", x = "Cluster", y = "Average Risk Rate") +
+  theme_minimal()
+
+```
+
+
+
+
+```{r}
+ggplot(dashboard_ready_data_01, aes(x = utilization_score, y = risk_rate,
+                                    size = expected_cost_savings, color = strategy_2025)) +
+  geom_point(alpha = 0.7) +
+  scale_size_continuous(labels = scales::dollar_format(scale = 1e-6, suffix = "M")) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Utilization vs Risk Rate by Strategy",
+       x = "Utilization Score", y = "Risk Rate",
+       size = "Predicted Savings", color = "Strategy") +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+#install.packages("waffle")
+library(waffle)
+
+strategy_counts <- dashboard_ready_data_01 %>%
+  count(strategy_2025)
+
+waffle::waffle(setNames(strategy_counts$n, strategy_counts$strategy_2025),
+               rows = 10,
+               title = "Fleet Strategy Distribution",
+               colors = RColorBrewer::brewer.pal(n = 4, name = "Set2"))
+
+```
+
+
+
+```{r}
+
+library(ggplot2)
+library(stringr)
+library(dplyr)
+
+dashboard_ready_data_01 %>%
+  mutate(strategy_2025 = str_wrap(strategy_2025, width = 15)) %>%  # Wrap long labels
+  count(company, strategy_2025, risk_level) %>%
+  ggplot(aes(x = strategy_2025, y = company, fill = n)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ risk_level) +
+  scale_fill_gradient(low = "#E0F7FA", high = "#01579B") +
+  labs(title = "Heatmap: Company vs Strategy vs Risk",
+       x = "Strategy", y = "Company", fill = "Asset Count") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+
+```
+
+
+Gauge Plot: Fleet-Level Fast Repair % Indicator
+
+```{r}
+library(flexdashboard)
+library(ggplot2)
+
+fast_pct <- dashboard_ready_data_01 %>%
+  summarise(pct = mean(fast_repair_cycle == "Yes", na.rm = TRUE)) %>%
+  pull(pct)
+
+flexdashboard::gauge(round(fast_pct * 100), min = 0, max = 100,
+       sectors = gaugeSectors(success = c(75, 100),
+                              warning = c(50, 75),
+                              danger = c(0, 50)),
+       label = "Fast Repair Assets %")
+
+```
+

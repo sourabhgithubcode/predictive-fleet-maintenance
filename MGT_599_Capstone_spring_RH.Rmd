@@ -1,0 +1,2522 @@
+---
+title: "Capstone"
+output:
+  word_document: default
+  html_document:
+    knit_root_dir: null
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+#Import as peand summary statistics
+
+```{r}
+# Load the required library
+library(readxl)
+
+# Define the file path (update the path to your actual Excel file)
+file_path <- "/Users/HP/Downloads/Capstone/DePaul_Summer_Quarter_meter.xlsx"
+
+# Read each worksheet into a separate dataframe
+asset_details <- read_excel(file_path, sheet = "Asset Detail")
+wo_costs      <- read_excel(file_path, sheet = "2024 WO Costs")
+usage_data    <- read_excel(file_path, sheet = "Miles (Driven Last Year)")
+
+# Optional: View structure of the data
+str(asset_details)
+str(wo_costs)
+str(usage_data)
+
+```
+
+```{r}
+# Load required libraries
+library(dplyr)   # for data manipulation (summaries, etc.)
+library(skimr)   # for comprehensive summary statistics
+library(ggplot2) # for data visualization
+
+# Inspect the structure of each dataset to identify numeric vs categorical columns
+glimpse(asset_details)  # view columns, types, sample values of Asset Details
+glimpse(wo_costs)       # view columns, types, sample values of WO Costs
+glimpse(usage_data)     # view columns, types, sample values of Usage data
+```
+
+```{r}
+
+# (Optional) If any categorical columns are read as character, consider converting to factor
+library(dplyr)
+
+asset_details <- asset_details %>%
+  mutate(across(where(is.character), as.factor))
+
+wo_costs <- wo_costs %>%
+  mutate(across(where(is.character), as.factor))
+
+usage_data <- usage_data %>%
+  mutate(across(where(is.character), as.factor))
+
+```
+
+
+
+#Summarize Numeric Fields
+
+```{r}
+# Summarize numeric fields in Asset Details (e.g., YEAR, METER)
+# Calculate mean, median, standard deviation (sd), min, and max for each numeric column
+asset_details %>%
+  summarise(across(where(is.numeric),
+                   list(mean   = ~ mean(.x, na.rm = TRUE),
+                        median = ~ median(.x, na.rm = TRUE),
+                        sd     = ~ sd(.x, na.rm = TRUE),
+                        min    = ~ min(.x, na.rm = TRUE),
+                        max    = ~ max(.x, na.rm = TRUE))))
+
+
+# Summarize numeric fields in WO Costs (e.g., LINE TOTAL, EXTERNAL LABOR, PART AMOUNT)
+wo_costs %>%
+  summarise(across(where(is.numeric),
+                   list(mean   = ~ mean(.x, na.rm = TRUE),
+                        median = ~ median(.x, na.rm = TRUE),
+                        sd     = ~ sd(.x, na.rm = TRUE),
+                        min    = ~ min(.x, na.rm = TRUE),
+                        max    = ~ max(.x, na.rm = TRUE))))
+
+
+# Summarize numeric fields in Usage data (e.g., MILES DRIVEN, ANNUALIZED MILEAGE, UTILIZED DAYS PER MONTH)
+usage_data %>%
+  summarise(across(where(is.numeric),
+                   list(mean   = ~ mean(.x, na.rm = TRUE),
+                        median = ~ median(.x, na.rm = TRUE),
+                        sd     = ~ sd(.x, na.rm = TRUE),
+                        min    = ~ min(.x, na.rm = TRUE),
+                        max    = ~ max(.x, na.rm = TRUE))))
+```
+
+
+#Summarize Categorical Fields
+
+```{r}
+library(dplyr)
+library(purrr)
+
+# Helper to print counts for each factor column in a df
+summarize_factors <- function(df, df_name) {
+  factor_cols <- names(df)[map_lgl(df, is.factor)]
+  cat("\n---", df_name, "categorical summaries ---\n")
+  walk(factor_cols, ~ {
+    cat("\n", .x, ":\n", sep = "")
+    print(df %>% count(!!sym(.x), sort = TRUE))
+  })
+}
+
+# (Assuming you’ve already converted all character columns to factors)
+summarize_factors(asset_details, "Asset Details")
+summarize_factors(wo_costs,       "WO Costs")
+summarize_factors(usage_data,     "Usage Data")
+
+
+```
+
+#Missing Values per Column
+
+```{r}
+# Identify missing values in each column of each dataset.
+
+# Count of missing values in each column for Asset Details
+asset_details %>% summarise(across(everything(), ~ sum(is.na(.))))
+# Each column in Asset Details will have a count of NA values (0 means no missing data in that column).
+
+# Count of missing values in each column for WO Costs
+wo_costs %>% summarise(across(everything(), ~ sum(is.na(.))))
+# Outputs number of NAs in each WO Costs column.
+
+# Count of missing values in each column for Usage data
+usage_data %>% summarise(across(everything(), ~ sum(is.na(.))))
+# Outputs number of NAs in each Usage data column.
+
+```
+
+```{r}
+# Use skimr to get an all-in-one descriptive summary of each dataset.
+skim(asset_details)
+skim(wo_costs)
+skim(usage_data)
+
+```
+
+
+```{r}
+
+library(dplyr)
+library(janitor)
+
+# Clean column names (lowercase, underscores)
+asset_details <- asset_details %>%
+  clean_names() %>%
+  rename(
+    unit_no = unit_number,
+    unit_status = unit_status,
+    category = category,
+    category_class_desc = category_class_desc,
+    year = year,
+    make = make,
+    model = model,
+    asset_in_service_date = in_service_date,
+    asset_disposal_date = disposal_date,
+    meter = meter,
+    company = company
+  )
+
+
+
+```
+
+```{r}
+library(dplyr)
+library(janitor)
+
+wo_costs <- wo_costs %>%
+  clean_names() %>%  # Converts names to snake_case
+  rename(
+    fiscal_period           = fiscal_period,
+    unit_no                 = unit_no,
+    category_class          = category_class,
+    cat_class_desc          = cat_class_desc,
+    wo_nbr                  = wo_nbr,
+    wo_reason_desc          = wo_reason_desc,
+    open_date               = open_date,
+    wo_completed_date       = wo_completed_date,
+    wo_status               = wo_status,
+    job                     = job,
+    job_description         = job_description,
+    job_reason_description  = job_reason_description,
+    external_labor_cost     = external_labor_cost,
+    labor_amount            = labor_amount,
+    labor_tax_rate          = labor_tax_rate,
+    labor_tax               = labor_tax,
+    part_amount             = part_amount,
+    parts_tax_rate          = parts_tax_rate,
+    parts_tax               = parts_tax,
+    line_total              = line_total,
+    maint_loc               = maint_loc,
+    damage                  = damage,
+    company                 = company
+  )
+
+
+```
+
+```{r}
+library(dplyr)
+library(janitor)
+
+usage_data <- usage_data %>%
+clean_names() %>%  # this makes all column names lowercase with underscores
+ rename(
+ unit_no = unit_no,
+  company = company,
+  asset_type = asset_type_asset_type,
+  model_year = model_year,
+  miles_driven = miles_driven,
+  months_with_mileage = months_with_mileage,
+  annualized_mileage = annualized_mileage,
+   utilized_days_per_month = utilized_days_per_month )
+```
+
+
+
+#Visualize Key Distributions
+
+```{r}
+# Plot histograms for numeric distributions and bar charts for categorical frequencies.
+
+# 1. Histogram of a numeric field: e.g., MILES_DRIVEN from Usage data
+ggplot(usage_data, aes(x = miles_driven)) +
+  geom_histogram(binwidth = 1000, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Miles Driven", x = "Miles Driven", y = "Count")
+# This creates a histogram of Miles Driven. Adjust binwidth as needed for clarity (here 1000 is an example).
+
+# 2. Histogram of another numeric field: e.g., METER from Asset Details (odometer readings)
+ggplot(asset_details, aes(x = meter)) +
+  geom_histogram(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Asset Meter Readings", x = "Meter Reading", y = "Count")
+# (No binwidth specified above, so ggplot2 will choose default bins. You can set binwidth depending on data range.)
+
+# 3. Bar chart for a categorical field: e.g., DAMAGE_FLAG from WO Costs
+ggplot(wo_costs, aes(x = damage)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Frequency of Damage Flag Status", x = "Damage", y = "Count")
+# Each bar represents the count of records for each category of DAMAGE_FLAG (e.g., "Yes" vs "No").
+
+# 4. Bar chart for top 5 companies in WO Costs by frequency
+top5_companies <- wo_costs %>% count(company, sort = TRUE) %>% slice_head(n = 5)
+ggplot(top5_companies, aes(x = reorder(company, -n), y = n)) +
+  geom_col(fill = "orange") +
+  labs(title = "Top 5 Companies by Work Order Count", x = "Company", y = "Number of Work Orders") +
+  coord_flip()
+# The above creates a horizontal bar chart of the 5 most frequent companies in the WO Costs data.
+# We use reorder() to sort bars by count and coord_flip() to flip axes for better label readability.
+
+```
+
+#other uselful visualizations:
+
+# Distribution of Total Costs
+
+```{r}
+# Inspect
+summary(wo_costs$line_total)
+str(wo_costs$line_total)
+unique(wo_costs$line_total[!is.na(wo_costs$line_total) & !is.numeric(wo_costs$line_total)])
+
+# Convert line_total to numeric
+wo_costs <- wo_costs %>%
+  mutate(line_total = as.numeric(line_total))  # conversion only
+
+# Remove only NA values (keep all valid values including outliers)
+wo_costs_clean <- wo_costs %>%
+  filter(!is.na(line_total) & line_total > 0)
+
+# Plot the full distribution including outliers
+ggplot(wo_costs_clean, aes(x = line_total)) +
+  geom_histogram(binwidth = 500, fill = "steelblue", color = "blue") +
+  labs(
+    title = "Distribution of Work Order Total Costs (Including Outliers)",
+    x = "Line Total ($)", y = "Frequency"
+  )
+
+ggplot(wo_costs_clean, aes(x = log1p(line_total))) +
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "white") +
+  labs(title = "Log-Scaled Distribution of Work Order Costs", x = "Log(Line Total $)", y = "Frequency")
+
+ggplot(wo_costs_clean, aes(y = line_total)) +
+  geom_boxplot(fill = "skyblue") +
+  scale_y_log10() +
+  labs(title = "Boxplot of Work Order Total Costs (Log Scale)", y = "Log(Line Total $)")
+
+library(dplyr)
+library(ggplot2)
+
+# Step 1: Convert line_total to numeric if not already
+wo_costs <- wo_costs %>%
+  mutate(line_total = as.numeric(line_total))
+
+# Step 2: Remove missing values (keep outliers)
+wo_costs_clean <- wo_costs %>%
+  filter(!is.na(line_total) & line_total > 0)
+
+# Step 3: Calculate 99th percentile threshold
+cost_threshold <- quantile(wo_costs_clean$line_total, 0.99, na.rm = TRUE)
+
+# Step 4: Tag each work order as 'Top 1%' or 'Normal'
+wo_costs_clean <- wo_costs_clean %>%
+  mutate(cost_category = if_else(line_total >= cost_threshold, "Top 1%", "Normal"))
+
+# Step 5: Visualize with different colors
+ggplot(wo_costs_clean, aes(x = line_total, fill = cost_category)) +
+  geom_histogram(binwidth = 500, color = "orange", alpha = 0.8, position = "identity") +
+  scale_fill_manual(values = c("Normal" = "steelblue", "Top 1%" = "red")) +
+  labs(title = "Distribution of WO Costs (Top 1% Highlighted)",
+       x = "Line Total ($)", y = "Count", fill = "WO Cost Category") +
+  theme_minimal()
+
+
+
+library(dplyr)
+library(ggplot2)
+
+# Step 1: Convert to numeric
+wo_costs <- wo_costs %>%
+  mutate(line_total = as.numeric(line_total))
+
+# Step 2: Impute NA values in line_total
+# Option A: Impute with median (robust to outliers)
+median_val <- median(wo_costs$line_total, na.rm = TRUE)
+wo_costs <- wo_costs %>%
+  mutate(line_total = ifelse(is.na(line_total), median_val, line_total))
+
+# Option B (alternative): Impute with mean
+# mean_val <- mean(wo_costs$line_total, na.rm = TRUE)
+# wo_costs <- wo_costs %>%
+#   mutate(line_total = ifelse(is.na(line_total), mean_val, line_total))
+
+# Step 3: Plot full distribution including outliers
+ggplot(wo_costs, aes(x = line_total)) +
+  geom_histogram(binwidth = 500, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Work Order Total Costs (With Imputed NAs)",
+       x = "Line Total ($)", y = "Frequency")
+
+```
+
+R Code to Find Asset with Most WOs
+
+```{r}
+library(dplyr)
+
+# Count work orders per asset
+top_asset <- wo_costs_clean %>%
+  group_by(unit_no) %>%
+  summarise(work_order_count = n()) %>%
+  arrange(desc(work_order_count)) %>%
+  slice(1)  # pick the top one
+
+print(top_asset)
+
+# Filter all work orders for the top asset
+wo_top_asset <- wo_costs_clean %>%
+  filter(unit_no == top_asset$unit_no)
+
+
+```
+
+
+
+Most work orders cost less than $5,000.
+
+A small number of WOs are extremely costly (outliers), but they're retained in this view for completeness.
+
+The extreme skew makes it difficult to visually compare the bulk of the data.
+
+
+# Top Repair Job Types
+
+```{r}
+wo_costs %>%
+  count(job_description, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  ggplot(aes(x = reorder(job_description, n), y = n)) +
+  geom_col(fill = "tomato") +
+  coord_flip() +
+  labs(title = "Top 10 Job Descriptions", x = "Job Description", y = "Count")
+
+```
+
+# Cost Comparison: Planned vs Unplanned Repairs
+
+```{r}
+ggplot(wo_costs, aes(x = wo_reason_desc, y = line_total)) +
+  geom_boxplot(fill = "skyblue") +
+  scale_y_log10() +  # Useful for cost data
+  labs(title = "Repair Cost by Work Order Type", x = "WO Reason", y = "Line Total (log scale)")
+
+```
+
+Insights:
+
+PLANNED maintenance (i.e., preventive work) has the lowest median cost
+and relatively tight interquartile range → indicates more controlled and
+predictable expenses.
+
+COLLISION/ORIGAMI and UNPLANNED repairs show higher medians and wider
+spread, with more extreme outliers → these are less predictable and
+often more expensive.
+
+REMAN CENTER work appears consistently high in cost → may involve heavy
+refurbishing.
+
+ROADCALL repairs are similar to UNPLANNED, but with slightly tighter
+variation.
+
+The log scale highlights that most costs fall between \$10–\$1,000 but
+vary by type.
+
+Implication: Focusing more on planned maintenance could help reduce
+costs and variability in repairs.
+
+# Mileage vs Repair Costs
+
+```{r}
+merged_data <- merge(asset_details, wo_costs, by.x = "unit_no", by.y = "unit_no")
+
+ggplot(merged_data, aes(x = meter, y = line_total)) +
+  geom_point(alpha = 0.3, color = "darkgreen") +
+  scale_y_log10() +
+  labs(title = "Meter Reading vs Repair Cost", x = "Meter", y = "Line Total ($)")
+
+```
+
+What it shows: This scatter plot shows the relationship between vehicle
+usage (meter) and repair cost (line_total).
+
+Insights:
+
+No strong linear trend — higher meter readings don’t consistently result
+in higher costs.
+
+A cluster of points appears at very low meter readings (likely new
+assets or early failures), yet some of them have high costs → may
+indicate early defects or accidents.
+
+Meter readings at regular intervals (2.5M, 5M, etc.) could be system
+artifacts or specific maintenance milestones.
+
+The wide spread of costs at all meter levels implies that cost is
+influenced by factors beyond mileage (e.g., type of repair, age, company
+practices).
+
+#Monthly Work Order Trend
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+wo_costs %>%
+  mutate(
+    # parse your datetime properly, e.g. "01/18/24 04:19"
+    open_dt = mdy_hm(open_date),                      
+    month   = floor_date(open_dt, "month")
+  ) %>%
+  count(month) %>%
+  ggplot(aes(x = month, y = n)) +
+    geom_col(fill = "darkorange") +
+    labs(
+      title = "Monthly Work Orders Trend",
+      x     = "Month",
+      y     = "Work Order Count"
+    )
+
+```
+
+Key Observations: Data spikes sharply from January 2024:
+
+Almost no activity in 2023, which may suggest:
+
+The data collection started in Jan 2024, or
+
+Older records were excluded or not relevant for this analysis.
+
+Consistently high volume across 2024:
+
+The monthly work order volume ranges around 33,000–38,000 WOs/month,
+indicating stable operational activity.
+
+Slight seasonal fluctuations, but overall volume stays strong and
+consistent.
+
+Drop-off after November 2024:
+
+December 2024 to February 2025 shows a sharp decline in work order
+counts.
+
+Possible reasons:
+
+Partial or incomplete data for those months.
+
+Seasonal slowdown (e.g., holidays, reduced fleet usage).
+
+Data not fully recorded/uploaded yet.
+
+Implications: 2024 is the main year for analysis and modeling due to
+full activity.
+
+Sudden drop in 2025 may require validation—is it missing data or
+operational change?
+
+Useful for planning time series forecasting, resource allocation, or
+identifying seasonal repair patterns.
+
+```{r}
+library(naniar)
+
+vis_miss(wo_costs, warn_large_data = FALSE) +
+  labs(title = "Missing Data in Full Work Order Table")
+
+
+```
+
+# Company/Location Cost Comparison
+
+```{r}
+wo_costs %>%
+  group_by(company) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE),
+            median_cost = median(line_total, na.rm = TRUE),
+            total_wo = n()) %>%
+  arrange(desc(avg_cost))
+
+```
+
+# Labor vs Part Cost Comparison
+
+```{r}
+library(ggplot2)
+ggplot(wo_costs, aes(x = labor_amount, y = part_amount)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  scale_x_log10() + scale_y_log10() +
+  labs(title = "Labor vs Part Costs", x = "Labor Amount ($)", y = "Part Amount ($)")
+
+```
+
+Insights: Shows a positive spread between labor_amount and part_amount.
+
+Majority of records are clustered between \$10–\$1,000, for both labor
+and part.
+
+The log-log scale reveals a triangle-shaped distribution:
+
+Suggests that some WOs are part-heavy, some are labor-heavy, and some
+are balanced.
+
+There are a few extreme outliers, with very high labor or part costs,
+worth investigating.
+
+Implication: Helps understand which WOs are driven by labor vs material.
+
+Could inform budget allocation, outsourcing vs in-house repairs, or
+vendor cost benchmarking.
+
+# Average Cost per Work Order Over Time
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+wo_costs %>%
+  # 1) parse your datetime strings into POSIXct
+  mutate(open_dt = mdy_hm(open_date)) %>%
+  # 2) floor to the first of each month
+  mutate(month = floor_date(open_dt, "month")) %>%
+  # 3) group & summarise
+  group_by(month) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE)) %>%
+  # 4) plot
+  ggplot(aes(x = month, y = avg_cost)) +
+    geom_line(color = "darkorange") +
+    labs(
+      title = "Average Cost per WO Over Time",
+      x     = "Month",
+      y     = "Average Line Total ($)"
+    )
+
+
+```
+
+Insights: Sharp cost spike around mid-to-late 2023 (\~\$2400 avg per
+WO), then a rapid decline.
+
+From early 2024 onward, costs stabilize in the \$300–\$500 range
+monthly.
+
+This suggests either:
+
+Historical data includes abnormal cases (accidents, cleanups).
+
+Change in processes, cost recording, or vendor contracts starting in
+2024.
+
+```{r}
+wo_costs %>%
+  mutate(open_dt = lubridate::mdy_hm(`open_date`),
+         month = lubridate::floor_date(open_dt, "month")) %>%
+  count(month) %>%
+  arrange(month)
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Prepare summary table
+wo_summary <- wo_costs %>%
+  mutate(open_dt = mdy_hm(`open_date`),
+         month = floor_date(open_dt, "month")) %>%
+  group_by(month) %>%
+  summarise(
+    avg_cost = mean(`line_total`, na.rm = TRUE),
+    med_cost = median(`line_total`, na.rm = TRUE),
+    count    = n()
+  ) %>%
+  ungroup()
+
+# Plot with dual line (avg & median) and count as bars
+ggplot(wo_summary, aes(x = month)) +
+  geom_col(aes(y = count / 10), fill = "grey80", alpha = 0.5) +  # scaled count as background bars
+  geom_line(aes(y = avg_cost), color = "orange", size = 1) +
+  geom_line(aes(y = med_cost), color = "steelblue", size = 1, linetype = "dashed") +
+  scale_y_continuous(
+    name = "WO Cost ($)",
+    sec.axis = sec_axis(~ . * 10, name = "WO Count")
+  ) +
+  labs(
+    title = "WO Cost Trends with Volume",
+    x = "Month",
+    y = "Average Line Total ($)",
+    caption = "Orange = Mean | Blue Dashed = Median | Grey Bars = WO Count (scaled)"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Convert open_date to date-time
+wo_costs <- wo_costs %>%
+  mutate(open_dt = mdy_hm(`open_date`))
+
+# Filter spike period (e.g., July–Nov 2023)
+wo_spike <- wo_costs %>%
+  filter(open_dt >= ymd("2023-07-01"), open_dt <= ymd("2023-11-30"))
+
+# View the top costly work orders in that period
+wo_spike %>%
+  select(`wo_nbr`, `unit_no`, 'open_date', `line_total`, `wo_reason_desc`, `job_description`) %>%
+  arrange(desc(`line_total`)) %>%
+  head(15)  # or top_n(10, `Line Total`)
+
+# Option 1: See top 10 in console
+
+
+
+```
+
+#To calculate and compare the average cost-to-count ratio during the
+spike period vs. the rest of the data, and scale it from 0 to 10, follow
+the steps below.
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Parse open date
+wo_costs <- wo_costs %>%
+  mutate(open_dt = mdy_hm(`open_date`))
+
+# Define spike period: July to Nov 2023
+spike_period <- wo_costs %>%
+  filter(open_dt >= ymd("2023-07-01") & open_dt <= ymd("2023-11-30"))
+
+# Define rest of period (excluding spike)
+rest_period <- wo_costs %>%
+  filter(open_dt < ymd("2023-07-01") | open_dt > ymd("2023-11-30"))
+
+# Calculate average cost
+avg_spike_cost <- mean(spike_period$`line_total`, na.rm = TRUE)
+avg_rest_cost  <- mean(rest_period$`line_total`, na.rm = TRUE)
+
+
+# Scale as a percentage score (0–100)
+scaled_score <- (avg_spike_cost / avg_rest_cost) * 100
+
+
+cat("Average WO cost during spike period: $", round(avg_spike_cost, 2), "\n")
+cat("Average WO cost during rest period:  $", round(avg_rest_cost, 2), "\n")
+cat("Scaled spike cost (0–100): ", round(scaled_score, 1), "%\n")
+
+
+```
+
+Work orders during the spike period were nearly 3.66x more expensive
+than the rest of the time.
+
+This confirms that the spike in average WO cost is not due to volume but
+due to a significant increase in per-WO expenses, likely caused by a few
+extreme-cost jobs.
+
+This confirms that the spike in average WO cost is not due to volume but
+due to a significant increase in per-WO expenses, likely caused by a few
+extreme-cost jobs.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Parse date
+wo_costs <- wo_costs %>%
+  mutate(open_dt = mdy_hm(`open_date`))
+
+# Define spike period
+spike_period <- wo_costs %>%
+  filter(open_dt >= ymd("2023-07-01") & open_dt <= ymd("2023-11-30"))
+
+# Get top 6 costliest WOs
+top_6_wo <- spike_period %>%
+  select(`wo_nbr`, `unit_no`, 'open_date', `line_total`, `wo_reason_desc`, `job_description`) %>%
+  arrange(desc(`line_total`)) %>%
+  slice_head(n = 6) %>%
+  mutate(WO_Label = paste("WO", `wo_nbr`, "-", `unit_no`))
+
+# Plot
+ggplot(top_6_wo, aes(x = reorder(WO_Label, `line_total`), y = `line_total`)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0("$", round(`line_total`, 0))), 
+            vjust = -0.5, size = 3.5) +
+  labs(
+    title = "Top 6 Highest Cost Work Orders (Spike Period)",
+    x = "Work Order",
+    y = "Line Total ($)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+
+Calculate the contribution of each cost type (labor, parts, external
+labor, tax) to the Line Total, grouped by Category Class, in R.
+
+```{r}
+library(dplyr)
+
+# Summarize cost components per category
+contribution_scaled <- wo_costs %>%
+  group_by(`category_class`) %>%
+  summarise(
+    total_line       = sum(line_total, na.rm = TRUE),
+    total_labor      = sum(labor_amount, na.rm = TRUE),
+    total_parts      = sum(part_amount, na.rm = TRUE),
+    total_ext_labor  = sum(external_labor_cost, na.rm = TRUE),
+    total_labor_tax  = sum(labor_tax, na.rm = TRUE),
+    total_parts_tax  = sum(parts_tax, na.rm = TRUE)
+  ) %>%
+  # Calculate raw percent contributions
+  mutate(
+    pct_labor     = total_labor / total_line,
+    pct_parts     = total_parts / total_line,
+    pct_ext_labor = total_ext_labor / total_line,
+    pct_tax       = (total_labor_tax + total_parts_tax) / total_line
+  ) %>%
+  # Rescale each component per row from 1 to 10
+  rowwise() %>%
+  mutate(
+    sum_pct = sum(c_across(starts_with("pct_"))),
+    scale_labor     = round((pct_labor     / sum_pct) * 10, 1),
+    scale_parts     = round((pct_parts     / sum_pct) * 10, 1),
+    scale_ext_labor = round((pct_ext_labor / sum_pct) * 10, 1),
+    scale_tax       = round((pct_tax       / sum_pct) * 10, 1)
+  ) %>%
+  ungroup() %>%
+  select(`category_class`, scale_labor, scale_parts, scale_ext_labor, scale_tax)
+# View the result
+print(contribution_scaled)
+
+```
+
+line_total is strongly correlated with:
+
+part_amount
+
+labor_amount
+
+labor_tax
+
+parts_tax
+
+Tax rates (labor_tax_rate, parts_tax_rate) show very weak correlation →
+likely constant or low-variance fields.
+
+Heatmap of Scaled Contributions
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Use your existing `contribution_scaled` data frame
+
+# Convert to long format for heatmap
+contribution_long <- contribution_scaled %>%
+  pivot_longer(
+    cols = starts_with("scale_"),
+    names_to = "Cost_Type",
+    values_to = "Score"
+  )
+
+# Clean up labels
+contribution_long$Cost_Type <- gsub("scale_", "", contribution_long$Cost_Type)
+
+# Heatmap
+ggplot(contribution_long, aes(x = Cost_Type, y = `category_class`, fill = Score)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "firebrick") +
+  labs(title = "Heatmap of Scaled Cost Contributions (1–10)",
+       x = "Cost Component", y = "Category Class") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 6))
+
+```
+
+```{r}
+#install.packages('fmsb')
+library(fmsb)
+library(tibble)
+
+
+# Select top 5 categories by total_line or any other logic
+top5 <- contribution_scaled %>%
+  filter(!is.na(scale_labor)) %>%
+  slice_max(order_by = scale_labor + scale_parts + scale_ext_labor + scale_tax, n = 5)
+
+# Format for radar chart
+radar_data <- top5 %>%
+  column_to_rownames("category_class") %>%
+  select(scale_labor, scale_parts, scale_ext_labor, scale_tax)
+
+# fmsb requires max/min rows
+radar_data <- rbind(rep(10, 4), rep(0, 4), radar_data)
+
+# Plot radar
+radarchart(radar_data,
+           pcol = rainbow(5),
+           pfcol = scales::alpha(rainbow(5), 0.4),
+           plwd = 2,
+           axistype = 1,
+           title = "Radar Chart: Top 5 Category Classes by Cost Mix")
+legend("topright", legend = rownames(radar_data)[-c(1, 2)], fill = scales::alpha(rainbow(5), 0.4), cex = 0.6)
+
+```
+line total from planned and un panned wos, by year, wo status, damage and company
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Ensure open date is in datetime format
+wo_costs <- wo_costs %>%
+  mutate(open_dt = mdy_hm(`open_date`),
+         year = year(open_dt),
+         wo_reason = `wo_reason_desc`,
+         wo_status = `wo_status`,
+         damage    = `damage`,
+         company   = `company`)
+
+# Summarize Line Total by multiple dimensions
+wo_summary <- wo_costs %>%
+  group_by(year, wo_reason, wo_status, damage, company) %>%
+  summarise(total_cost = sum(line_total, na.rm = TRUE), .groups = "drop")
+
+```
+
+
+Visulizations:
+
+```{r}
+
+# A. Cost Trend by WO Reason and Year
+
+
+library(ggplot2)
+
+ggplot(wo_summary %>% filter(!is.na(wo_reason)), 
+       aes(x = year, y = total_cost, fill = wo_reason)) +
+  geom_col(position = "dodge") +
+  labs(title = "Total Line Cost by WO Reason per Year",
+       x = "Year", y = "Total Line Cost ($)", fill = "WO Reason") +
+  theme_minimal()
+
+#B. Faceted Cost Breakdown by Company and WO Status
+
+ggplot(wo_summary %>% filter(!is.na(company)), 
+       aes(x = company, y = total_cost, fill = wo_status)) +
+  geom_col(position = "stack") +
+  facet_wrap(~ wo_reason, scales = "free_y") +
+  labs(title = "Cost by Company & WO Status (Faceted by WO Reason)",
+       x = "Company", y = "Total Line Cost") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+#C. Damage vs No Damage Cost Comparison
+ggplot(wo_summary %>% filter(!is.na(damage)), 
+       aes(x = damage, y = total_cost, fill = damage)) +
+  geom_col() +
+  facet_wrap(~ wo_reason) +
+  labs(title = "Cost by Damage Flag and WO Reason",
+       x = "Damage", y = "Total Line Cost") +
+  theme_minimal()
+
+
+```
+
+```{r}
+wo_costs %>%
+  group_by(wo_status) %>%
+  summarise(total_cost = sum(line_total, na.rm = TRUE), .groups = "drop")
+
+```
+
+
+# Summary Table by Category Class
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+wo_costs %>%
+  group_by(cat_class_desc) %>%
+  summarise(total_wos = n(),
+            avg_line_total = mean(line_total, na.rm = TRUE),
+            median_line_total = median(line_total, na.rm = TRUE)) %>%
+  arrange(desc(avg_line_total))
+
+```
+
+#check for duplicates
+
+```{r}
+
+library(dplyr)
+
+# For Asset Details
+duplicates_asset <- asset_details %>%
+  count(`unit_no`) %>%
+  filter(n > 1)
+
+# For Work Order Costs
+duplicates_wo <- wo_costs %>%
+  count(`unit_no`) %>%
+  filter(n > 1)
+
+# For Usage Data
+duplicates_usage <- usage_data %>%
+  count(`unit_no`) %>%
+  filter(n > 1)
+
+# Print results
+list(
+  asset_duplicates = duplicates_asset,
+  wo_duplicates = duplicates_wo,
+  usage_duplicates = duplicates_usage
+)
+
+
+
+```
+
+No Duplicates
+
+```{r}
+library(dplyr)
+
+summary_table <- tibble(
+  Dataset = c("Asset Details", "WO Costs", "Usage Data"),
+  Duplicate_Units = c(
+    sum(duplicated(asset_details$unit_number)),
+    sum(duplicated(wo_costs$unit_no)),
+    sum(duplicated(usage_data$unit_no))
+  )
+)
+
+print(summary_table)
+
+```
+
+To determine whether the labor and parts tax rates in your work order dataset are flat or variable
+
+```{r}
+# Load required library
+library(dplyr)
+
+# Step 1: Summarize unique values
+wo_costs %>%
+  summarise(
+    unique_labor_tax_rates = n_distinct(labor_tax_rate, na.rm = TRUE),
+    unique_parts_tax_rates = n_distinct(parts_tax_rate, na.rm = TRUE)
+  )
+
+```
+This tells you how many unique tax rates exist. If it returns 1, it’s flat. If >1, it varies.
+
+```{r}
+# Check distribution of labor tax rate
+wo_costs %>%
+  count(labor_tax_rate, sort = TRUE)
+
+# Check distribution of parts tax rate
+wo_costs %>%
+  count(parts_tax_rate, sort = TRUE)
+
+```
+This lets you visually inspect whether the rates cluster around one value or vary widely.
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(wo_costs, aes(x = labor_tax_rate)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Labor Tax Rates")
+
+ggplot(wo_costs, aes(x = parts_tax_rate)) +
+  geom_histogram(bins = 30, fill = "salmon", color = "black") +
+  labs(title = "Distribution of Parts Tax Rates")
+
+```
+Diagnostic Analytics
+
+Root Cause of High-Cost Work Orders
+
+
+```{r}
+library(dplyr)
+
+high_costs_summary <- wo_costs %>%
+  filter(line_total > quantile(line_total, 0.9, na.rm = TRUE)) %>%
+  group_by(cat_class_desc, company, maint_loc, job_description) %>%
+  summarise(
+    avg_cost = mean(line_total, na.rm = TRUE),
+    total_cost = sum(line_total, na.rm = TRUE),
+    count = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(avg_cost)) %>%
+  slice_head(n = 20)
+
+top_cat_classes <- wo_costs %>%
+  filter(line_total > quantile(line_total, 0.9, na.rm = TRUE)) %>%
+  group_by(cat_class_desc) %>%
+  summarise(
+    avg_cost = mean(line_total, na.rm = TRUE),
+    total_cost = sum(line_total, na.rm = TRUE),
+    count = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_cost))
+
+
+
+
+
+```
+
+
+Run Root Cause Grouping for RACKING Jobs
+
+```{r}
+wo_costs %>%
+  filter(cat_class_desc == "RACKING") %>%
+  group_by(job_description) %>%
+  summarise(
+    avg_cost = mean(line_total, na.rm = TRUE),
+    total_cost = sum(line_total, na.rm = TRUE),
+    count = n()
+  ) %>%
+  arrange(desc(total_cost))
+
+wo_costs %>%
+  filter(line_total > quantile(line_total, 0.9, na.rm = TRUE)) %>%
+  count(maint_loc, sort = TRUE) %>%
+  top_n(10)
+
+```
+
+
+Repeated Failures per Unit
+
+
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+# Ensure open_date is parsed correctly
+wo_costs <- wo_costs %>%
+  mutate(open_date = parse_date_time(open_date, orders = c("mdy HMS", "mdy HM", "mdy", "ymd HMS", "ymd", "dmy HMS"), tz = "UTC"))
+
+# Then run your analysis
+wo_90_summary <- wo_costs %>%
+  group_by(unit_no) %>%
+  arrange(open_date, .by_group = TRUE) %>%
+  mutate(diff_days = as.numeric(difftime(lead(open_date), open_date, units = "days"))) %>%
+  filter(diff_days <= 90) %>%
+  count(unit_no, name = "frequent_wos") %>%
+  arrange(desc(frequent_wos))
+
+
+```
+
+```{r}
+colnames(wo_costs)
+colnames(asset_details)
+
+```
+
+ Treating NA value inconsistencies in the dataset for joining 
+ 
+```{r}
+# Check the class and sample values
+str(wo_costs$unit_no)
+str(asset_details$unit_number)
+
+library(dplyr)
+library(stringr)
+
+
+# Check which unit_no values exist in wo_costs but not in asset_details
+missing_units <- anti_join(wo_costs, asset_details, by = c("unit_no" = "unit_no"))
+
+# Optional: view top 10
+head(missing_units$unit_no, 10)
+
+```
+```{r}
+
+# Standardize format: trim, upper case, remove special characters
+wo_costs <- wo_costs %>%
+  mutate(unit_no = str_trim(str_to_upper(as.character(unit_no))))
+
+asset_details <- asset_details %>%
+  mutate(unit_number = str_trim(str_to_upper(as.character(unit_no))))
+
+# Now join the datasets
+unit_vehicle_info <- wo_costs %>%
+  left_join(asset_details %>% select(unit_number, make, model, year), 
+            by = c("unit_no" = "unit_number"))
+# Check for NAs after join
+sum(is.na(unit_vehicle_info$make))  # Should drop significantly
+sum(is.na(unit_vehicle_info$model))
+sum(is.na(unit_vehicle_info$year))
+
+
+
+```
+
+
+```{r}
+# Step 1: Create a vector of top unit numbers (from your last output)
+top_units <- c("70659", "70674", "BEN00001", "70508", "70579", "70527", "70521", 
+               "70537", "70519", "70611", "70628", "70509", "70650", "AMS00002–R", 
+               "70581", "70612", "BEN00013", "BEN00024", "BEN00002", "70671")
+
+# Step 2: Filter work orders for just those units
+frequent_units_data <- wo_costs %>% 
+  filter(unit_no %in% top_units)
+
+# Correct the join with actual column name
+joined_data <- frequent_units_data %>%
+  left_join(asset_details, by = c("unit_no" = "unit_number"))
+
+
+# Step 4: Top job descriptions per unit
+top_jobs <- joined_data %>%
+  group_by(unit_no, job_description) %>%
+  summarise(count = n(), avg_cost = mean(line_total, na.rm = TRUE)) %>%
+  arrange(desc(count))
+
+# Step 5: Top maintenance locations per unit
+top_locations <- joined_data %>%
+  group_by(unit_no, maint_loc) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+# Replace View() with head() or kable()
+head(top_jobs, 10)         # View top 10 job descriptions
+head(top_locations, 10)    # View top 10 maintenance locations
+
+
+```
+
+```{r}
+
+repair_summary <- wo_costs %>%
+  group_by(unit_no) %>%
+  summarise(
+    num_repairs = n(),
+    avg_cost = mean(line_total, na.rm = TRUE)
+  )
+
+unit_vehicle_info <- asset_details %>%
+  left_join(repair_summary, by = "unit_no")
+
+#Summarize by Vehicle Model (Top 10)
+unit_vehicle_info %>%
+  filter(!is.na(model)) %>%
+  group_by(make, model) %>%
+  summarise(
+    total_repairs = sum(num_repairs, na.rm = TRUE),
+    avg_cost = mean(avg_cost, na.rm = TRUE),
+    units = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_repairs)) %>%
+  head(10)
+#above code to support summarize by Vehicle Year
+# This gives you which vehicle types are most problematic overall.
+
+
+#Summarize by Vehicle Year
+unit_vehicle_info %>%
+  filter(!is.na(year)) %>%
+  group_by(year) %>%
+  summarise(
+    avg_repair_cost = mean(avg_cost, na.rm = TRUE),
+    total_repairs = sum(num_repairs, na.rm = TRUE),
+    unit_count = n()
+  ) %>%
+  arrange(year)
+#See if older vehicles are more costly or need more repairs.
+
+#A. Average Cost by Model
+
+unit_vehicle_info %>%
+  filter(!is.na(model)) %>%
+  group_by(model) %>%
+  summarise(avg_cost = mean(avg_cost, na.rm = TRUE)) %>%
+  top_n(10, avg_cost) %>%
+  ggplot(aes(x = reorder(model, avg_cost), y = avg_cost)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Costliest Models to Maintain", x = "Model", y = "Average Cost ($)")
+
+#B. Repair Count by Year
+unit_vehicle_info %>%
+  filter(!is.na(year)) %>%
+  group_by(year) %>%
+  summarise(total_repairs = sum(num_repairs)) %>%
+  ggplot(aes(x = factor(year), y = total_repairs)) +
+  geom_col(fill = "darkorange") +
+  labs(title = "Repairs by Vehicle Year", x = "Year", y = "Total Repairs")
+
+
+
+```
+
+
+Unplanned WOs Following Planned Maintenance
+
+What to Analyze: How often a PM is followed by an Unplanned WO on the same unit
+Why: Measure PM effectiveness
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Ensure open_date is properly parsed once
+wo_costs <- wo_costs %>%
+  mutate(open_date = parse_date_time(open_date, orders = c("mdy HMS", "mdy HM", "mdy", "ymd HMS", "ymd", "dmy HMS"), tz = "UTC"))
+
+# Now run your grouped transition analysis
+wo_costs %>%
+  filter(wo_reason_desc %in% c("PLANNED", "UNPLANNED")) %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(
+    next_reason = lead(wo_reason_desc),
+    next_date = lead(open_date),
+    gap_days = as.numeric(difftime(next_date, open_date, units = "days"))
+  ) %>%
+  filter(wo_reason_desc == "PLANNED", next_reason == "UNPLANNED", gap_days <= 30) %>%
+  left_join(asset_details, by = c("unit_no" = "unit_number")) %>%
+  group_by(category_class_desc) %>%
+  summarise(
+    transitions = n(),
+    affected_units = n_distinct(unit_no),
+    avg_gap = round(mean(gap_days, na.rm = TRUE), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(transitions))
+
+```
+
+```{r}
+# Top 10 Units with Most Transitions
+top_units <- wo_costs %>%
+  filter(wo_reason_desc %in% c("PLANNED", "UNPLANNED")) %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(next_reason = lead(wo_reason_desc),
+         next_date = lead(open_date),
+         gap_days = as.numeric(difftime(next_date, open_date, units = "days"))) %>%
+  filter(wo_reason_desc == "PLANNED", next_reason == "UNPLANNED", gap_days <= 30) %>%
+  count(unit_no, sort = TRUE) %>%
+  head(10)
+
+
+
+ggplot(top_units, aes(x = reorder(unit_no, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Units with PLANNED → UNPLANNED WOs (<30 days)",
+       x = "Unit No", y = "Transitions")
+
+```
+
+WO Cost Variability by Job Type
+What to Analyze: Standard deviation of line_total within each job_description
+
+Why: Pinpoint inconsistent job execution or pricing
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+top_variable_jobs <- wo_costs %>%
+  group_by(job_description) %>%
+  summarise(
+    sd_cost = sd(line_total, na.rm = TRUE),
+    mean_cost = mean(line_total, na.rm = TRUE),
+    count = n()
+  ) %>%
+  filter(count > 50) %>%
+  arrange(desc(sd_cost)) %>%
+  slice_head(n = 15)
+
+# Visualization
+ggplot(top_variable_jobs, aes(x = reorder(job_description, sd_cost), y = sd_cost)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  coord_flip() +
+  labs(title = "Top 15 Job Types with Highest Cost Variability",
+       x = "Job Description",
+       y = "Standard Deviation of Cost ($)")
+
+```
+High-Cost Locations vs Others
+What to Analyze: Compare average cost per WO across maint_loc
+ Why: Uncover location inefficiencies or vendor issues
+ 
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Summarize and arrange locations by average cost
+top_locations <- wo_costs %>%
+  group_by(maint_loc) %>%
+  summarise(
+    avg_cost = mean(line_total, na.rm = TRUE),
+    count = n()
+  ) %>%
+  filter(count > 50) %>%  # Optional: remove low-activity locations
+  arrange(desc(avg_cost)) %>%
+  slice_head(n = 15)  # Keep only top 15 for clarity
+
+# Plotting
+ggplot(top_locations, aes(x = reorder(maint_loc, avg_cost), y = avg_cost)) +
+  geom_col(fill = "tomato") +
+  coord_flip() +
+  labs(
+    title = "Top 15 Maintenance Locations by Avg WO Cost",
+    x = "Maintenance Location",
+    y = "Average WO Cost ($)"
+  ) +
+  theme_minimal()
+
+
+```
+ 
+ 
+ audit Location 6030
+ 
+ 
+```{r}
+# Breakdown of top job types for Location 6030
+wo_costs %>%
+  filter(maint_loc == "6030") %>%
+  group_by(job_description) %>%
+  summarise(
+    avg_labor = mean(labor_amount, na.rm = TRUE),
+    avg_parts = mean(part_amount, na.rm = TRUE),
+    avg_total = mean(line_total, na.rm = TRUE),
+    count = n()
+  ) %>%
+  arrange(desc(avg_total)) %>%
+  head(15) -> top_6030_jobs
+
+# View the table
+print(top_6030_jobs)
+
+```
+ 
+ 
+Bar Chart: PM Followed by Unplanned WOs by Category
+```{r}
+pm_unplanned <- wo_costs %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(next_reason = lead(wo_reason_desc),
+         next_date = lead(open_date),
+         gap_days = as.numeric(difftime(next_date, open_date, units = "days"))) %>%
+  filter(wo_reason_desc == "PLANNED" & next_reason == "UNPLANNED" & gap_days <= 30) %>%
+  group_by(cat_class_desc) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+ggplot(pm_unplanned, aes(x = reorder(cat_class_desc, count), y = count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "PM Followed by Unplanned WOs (≤30 Days) by Category", x = "Category", y = "Count") +
+  theme_minimal()
+
+
+```
+ 
+```{r}
+
+```
+
+
+
+```{r}
+
+names(usage_data)
+
+```
+
+
+
+Cleaning for asset details 
+
+```{r}
+# Load required packages
+library(dplyr)
+library(janitor)
+library(lubridate)
+library(stringr)
+
+# Clean column names
+asset_details <- asset_details %>% clean_names()
+
+# Convert date columns to proper Date format
+asset_details <- asset_details %>%
+  mutate(
+    in_service_date = mdy_hms(asset_in_service_date, quiet = TRUE),  # handles time-stamped dates
+    disposal_date = mdy_hms(asset_disposal_date, quiet = TRUE)
+  )
+
+# Convert year to numeric (sometimes it's character)
+asset_details <- asset_details %>%
+  mutate(year = as.numeric(year))
+
+# Clean up unit_number and model/make fields
+asset_details <- asset_details %>%
+  mutate(
+    unit_number = str_trim(str_to_upper(unit_number)),
+    make = str_trim(str_to_title(make)),
+    model = str_trim(str_to_title(model))
+  )
+
+# Handle meter readings: convert to numeric and remove extreme outliers if needed
+asset_details <- asset_details %>%
+  mutate(meter = as.numeric(meter)) %>%
+  filter(!is.na(meter))
+
+# Remove duplicate unit records, if any
+asset_details <- asset_details %>%
+  distinct(unit_number, .keep_all = TRUE)
+
+# Optional: check summary to confirm cleaning
+summary(asset_details)
+
+
+library(janitor)
+library(dplyr)
+library(stringr)
+library(lubridate)
+
+# Clean column names
+asset_details <- asset_details %>% clean_names()
+
+# Standardize character fields
+asset_details <- asset_details %>%
+  mutate(
+    company = str_trim(str_to_upper(company)),
+    unit_number = str_trim(str_to_upper(unit_number)),
+    unit_status = str_trim(str_to_title(unit_status)),
+    category = str_trim(str_to_title(category)),
+    category_class_desc = str_trim(str_to_title(category_class_desc)),
+    make = str_trim(str_to_title(make)),
+    model = str_trim(str_to_upper(model))
+  )
+
+# Fix dates
+asset_details <- asset_details %>%
+  mutate(
+    in_service_date = mdy_hms(in_service_date, quiet = TRUE),
+    disposal_date = mdy_hms(disposal_date, quiet = TRUE)
+  )
+
+# Remove rows with missing unit_number
+asset_details <- asset_details %>% filter(!is.na(unit_number) & unit_number != "")
+
+# Optional: Filter out obviously invalid meter readings (like > 10 million)
+asset_details <- asset_details %>% filter(meter < 1e7 | is.na(meter))
+
+# Summary check
+skimr::skim(asset_details)
+
+```
+
+
+data cleaning for miles driven 
+
+```{r}
+
+
+# Standardize text fields
+usage_data <- usage_data %>%
+  mutate(
+    unit_no = str_trim(str_to_upper(unit_no)),
+    company = str_trim(str_to_upper(company)),
+    asset_type_asset_type = str_trim(str_to_title(asset_type))
+  )
+
+# Convert year to numeric if needed
+usage_data <- usage_data %>%
+  mutate(model_year = as.numeric(model_year))
+
+# Convert usage columns to numeric
+usage_data <- usage_data %>%
+  mutate(across(c(
+    miles_driven, months_with_mileage,
+    annualized_mileage, utilized_days_per_month
+  ), as.numeric))
+
+
+# Summary check
+summary(usage_data)
+
+# Ensure fields are numeric (you already did this but re-assert)
+usage_data <- usage_data %>%
+  mutate(across(c(
+    miles_driven, months_with_mileage,
+    annualized_mileage, utilized_days_per_month
+  ), as.numeric))
+
+# Fix odd values
+usage_data <- usage_data %>%
+  filter(months_with_mileage > 0, utilized_days_per_month > 0)
+
+# Calculate expected annual mileage to compare
+usage_data <- usage_data %>%
+  mutate(
+    expected_annual_mileage = (miles_driven / months_with_mileage) * 12,
+    mileage_gap = abs(annualized_mileage - expected_annual_mileage)
+  )
+
+# Filter out rows where annualized mileage differs too much from calculation (optional)
+usage_data <- usage_data %>%
+  filter(mileage_gap < 10000 | is.na(mileage_gap))
+
+# Summary view
+summary(usage_data)
+
+
+
+```
+cleaning wo costs (standardising the open date names)
+
+
+```{r}
+
+wo_costs <- wo_costs %>%
+  mutate(
+    open_date = as.POSIXct(open_date, format = "%m/%d/%y %H:%M", tz = "UTC"),
+    wo_completed_date = as.POSIXct(wo_completed_date, format = "%m/%d/%y %H:%M", tz = "UTC")
+  )
+
+
+```
+
+
+```{r}
+sum(is.na(wo_costs$open_date))          # Should be < total rows
+sum(is.na(wo_costs$wo_completed_date))  # Same
+
+```
+
+
+
+
+
+```{r}
+skimr::skim(wo_costs)
+
+```
+
+
+Now solving the question 
+
+How can vehicle usage patterns — such as mileage, service life, utilization level, and maintenance history — be used to predict high-cost risk categories and support preventive maintenance strategies?
+
+Step 1: Flag Over-/Under-Utilized Units Based on Mileage
+
+Definition: Use annualized_mileage from the usage_data to benchmark utilization.
+
+Why: These outliers often signal assets requiring more frequent maintenance or underuse leading to waste.
+
+```{r}
+
+
+# Calculate mean mileage as benchmark
+mean_mileage <- mean(usage_data$annualized_mileage, na.rm = TRUE)
+
+# Categorize units into four levels
+usage_data <- usage_data %>%
+  mutate(utilization_flag = case_when(
+    annualized_mileage >= mean_mileage * 1.5 ~ "Highly Overutilized",
+    annualized_mileage >= mean_mileage * 1.1 ~ "Moderately Overutilized",
+    annualized_mileage <= mean_mileage * 0.5 ~ "Highly Underutilized",
+    annualized_mileage <= mean_mileage * 0.9 ~ "Moderately Underutilized",
+    TRUE ~ "Normal"
+  ))
+
+
+
+```
+
+
+
+Visualise Bar Chart: Count of Units in Each Utilization Category
+
+```{r}
+library(ggplot2)
+
+ggplot(usage_data, aes(x = utilization_flag)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Distribution of Units by Utilization Level",
+       x = "Utilization Category",
+       y = "Number of Units") +
+  theme_minimal()
+
+```
+
+Business Implications for Reyes Holdings:
+Asset Rebalancing:
+Reduce operating costs by redistributing underutilized units to regions with higher demand.
+
+Preventive Maintenance Targeting:
+Focus inspections on overutilized assets to reduce downtime.
+
+Lifecycle Management:
+Consider retiring or leasing out underperforming units and rotating high-mileage ones to prolong useful life.
+
+
+Boxplot: Annualized Mileage per Utilization Category
+
+```{r}
+ggplot(usage_data, aes(x = utilization_flag, y = annualized_mileage)) +
+  geom_boxplot(fill = "darkgreen", alpha = 0.6) +
+  labs(title = "Mileage Spread by Utilization Category",
+       x = "Utilization Category",
+       y = "Annualized Mileage") +
+  theme_minimal()
+
+```
+Highly Overutilized (Far Right Skew, High Variance):
+
+Median mileage is around 80,000–90,000 miles, with a very wide spread and many extreme outliers reaching beyond 200,000 miles.
+
+Implication: These units are likely critical assets facing the highest operational stress, making them priority candidates for:
+
+Predictive maintenance
+
+Lifecycle cost modeling
+
+Risk management (due to high unplanned breakdown probability)
+
+
+ Pie Chart  
+ 
+```{r}
+library(dplyr)
+library(ggplot2)
+
+usage_data %>%
+  count(utilization_flag) %>%
+  ggplot(aes(x = "", y = n, fill = utilization_flag)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Utilization Distribution") +
+  theme_void()
+
+```
+
+
+Step 2: Identify High-Risk Units Based on WO Frequency
+Definition: Units returning for service within 90 days multiple times.
+
+```{r}
+
+wo_costs <- wo_costs %>%
+  mutate(
+    open_date = as.POSIXct(open_date, format = "%m/%d/%y %H:%M", tz = "UTC"),
+    wo_completed_date = as.POSIXct(wo_completed_date, format = "%m/%d/%y %H:%M", tz = "UTC")
+  )
+
+```
+
+
+```{r}
+str(wo_costs$open_date)
+summary(wo_costs$open_date)
+unique(wo_costs$job_reason_description)
+
+
+
+```
+
+
+```{r}
+# Group and calculate the gap in days
+high_risk_flags <- wo_costs %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(
+    next_reason = lead(wo_reason_desc),
+    next_date = lead(open_date),
+    gap_days = as.numeric(difftime(next_date, open_date, units = "days"))
+  ) %>%
+  ungroup()
+
+# Filter high-risk transition: PLANNED followed by UNPLANNED within 90 days
+high_risk_events <- high_risk_flags %>%
+  filter(wo_reason_desc == "PLANNED", 
+         next_reason == "UNPLANNED", 
+         gap_days <= 90)
+
+# Count high-risk units (repeat occurrences)
+high_risk_assets <- high_risk_events %>%
+  count(unit_no, name = "repeat_issues") %>%
+  filter(repeat_issues >= 2)
+
+# View results
+head(high_risk_assets)
+
+
+```
+
+Trace Unit Metadata (like make, model, category)
+```{r}
+
+
+# Join high-risk units with asset details
+high_risk_units_info <- high_risk_assets %>%
+  left_join(asset_details, by = "unit_no")
+
+# View the enriched output
+head(high_risk_units_info)
+
+high_risk_units_info %>%
+  count(category_class_desc, sort = TRUE)
+
+high_risk_units_info %>%
+  count(make, sort = TRUE)
+
+
+
+```
+1. Top Categories with Repeat Failures
+
+```{r}
+library(ggplot2)
+
+# Top 10 categories by count
+high_risk_units_info %>%
+  count(category_class_desc, sort = TRUE) %>%
+  top_n(10, n) %>%
+  ggplot(aes(x = reorder(category_class_desc, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 High-Risk Asset Categories",
+       x = "Category",
+       y = "Number of High-Risk Units")
+
+```
+
+Make & Model of High-Risk Units
+
+```{r}
+# Combine make and model into one label
+high_risk_units_info %>%
+  mutate(make_model = paste(make, model)) %>%
+  count(make_model, sort = TRUE) %>%
+  top_n(10, n) %>%
+  ggplot(aes(x = reorder(make_model, n), y = n)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  coord_flip() +
+  labs(title = "Top 10 High-Risk Make & Model Combinations",
+       x = "Make & Model",
+       y = "Number of High-Risk Units")
+
+```
+
+
+Bubble Chart: Repeat Failures by Make and Category
+
+```{r}
+high_risk_units_info %>%
+  count(make, category_class_desc, wt = repeat_issues) %>%
+  ggplot(aes(x = make, y = category_class_desc, size = n)) +
+  geom_point(alpha = 0.7, color = "tomato") +
+  theme_minimal() +
+  labs(title = "Repeat Failures by Make & Category",
+       x = "Make", y = "Category", size = "Repeat Failures") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+
+To verify that all WOs in wo_costs were generated for assets listed in asset_details
+
+```{r}
+library(dplyr)
+
+# Find unmatched WOs — these are WOs with no matching asset
+unmatched_wos <- anti_join(wo_costs, asset_details, by = "unit_no")
+
+# Count how many are unmatched
+n_unmatched <- nrow(unmatched_wos)
+
+# Print result
+cat("Number of WOs without matching asset:", n_unmatched, "\n")
+
+
+```
+
+profile the 48,249 unmatched WOs to understand their business pattern:
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Step 1: Ensure unmatched WOs are calculated
+
+unmatched_wos <- anti_join(wo_costs, asset_details, by = "unit_no")
+
+# Step 2: Parse open date to extract year (if needed)
+unmatched_wos <- unmatched_wos %>%
+  mutate(open_dt = mdy_hm(`open_date`, quiet = TRUE),
+         year = year(open_dt))
+
+# Step 3: Profile by company
+unmatched_wos %>%
+  count(company, sort = TRUE)
+
+# Step 4: Profile by WO reason
+unmatched_wos %>%
+  count(`wo_reason_desc`, sort = TRUE)
+
+# Step 5: Profile by year
+unmatched_wos %>%
+  count(year, sort = TRUE)
+
+# Step 6: Total and average cost of unmatched WOs
+unmatched_wos %>%
+  summarise(
+    total_cost = sum(`line_total`, na.rm = TRUE),
+    avg_cost   = mean(`line_total`, na.rm = TRUE),
+    wo_count   = n()
+  )
+
+```
+
+Business Implications:
+
+ A large number of PLANNED WOs with no asset suggests flaws in scheduling systems or asset registration before PM.
+
+📉 No year values means these WOs are impossible to trend over time, which limits historical reporting accuracy.
+
+💰 With $27.5M in spend (20% of total WO cost based on earlier numbers), this missing linkage directly weakens asset-level cost control, ROI calculation, and predictive accuracy.
+
+🧾 Widespread across all companies → this is a system-wide data governance issue, not an isolated team or unit error.
+
+
+
+compare unit_no mismatches across all three datasets (wo_costs, asset_details, usage_data) to understand coverage gaps.
+
+
+
+```{r}
+library(dplyr)
+
+# Standardize column names
+usage_data <- usage_data %>% rename(unit_no = unit_no)
+
+# 1. WOs not matched in asset_details
+unmatched_asset <- anti_join(wo_costs, asset_details, by = "unit_no") %>% nrow()
+
+# 2. WOs not matched in usage_data
+unmatched_usage <- anti_join(wo_costs, usage_data, by = "unit_no") %>% nrow()
+
+# 3. Assets not matched in wo_costs
+asset_only <- anti_join(asset_details, wo_costs, by = "unit_no") %>% nrow()
+
+# 4. Usage not matched in wo_costs
+usage_only <- anti_join(usage_data, wo_costs, by = "unit_no") %>% nrow()
+
+# Output results
+cat("WOs not in asset_details     :", unmatched_asset, "\n")
+cat("WOs not in usage_data        :", unmatched_usage, "\n")
+cat("Assets never used in WOs     :", asset_only, "\n")
+cat("Usage units not used in WOs  :", usage_only, "\n")
+
+```
+Business Implications
+Only a subset of WOs (≈193K) can be confidently analyzed with both asset and usage context.
+
+You’ll need to exclude or flag unmatched rows in predictive models and asset-level dashboards.
+
+The 48K WOs without assets and 302K without usage data pose the biggest risk to analytics accuracy.
+
+```{r}
+# Get unique unit_nos from each dataset
+unit_wo    <- unique(wo_costs$unit_no)
+unit_asset <- unique(asset_details$unit_no)
+unit_usage <- unique(usage_data$unit_no)
+
+# Find completely unmatched unit_nos (not in asset or usage)
+completely_unmatched_units <- setdiff(unit_wo, union(unit_asset, unit_usage))
+
+# Count of completely unmatched unit_nos
+length(completely_unmatched_units)
+
+# Create a summary: how many WOs each unmatched unit has
+unmatched_wo_summary <- wo_costs %>%
+  filter(unit_no %in% completely_unmatched_units) %>%
+  group_by(unit_no) %>%
+  summarise(wo_count = n()) %>%
+  arrange(desc(wo_count))
+
+# Total number of WOs for all unmatched units
+total_unmatched_wos <- sum(unmatched_wo_summary$wo_count)
+
+# View results
+print(head(unmatched_wo_summary))   # top unmatched units by WO count
+print(total_unmatched_wos)          # total unmatched WO rows
+
+
+```
+
+
+We cant remove them as they are important
+
+
+
+Flag them in the dataset like this
+```{r}
+# Flag units not in either asset or usage
+wo_costs <- wo_costs %>%
+  mutate(unit_flag = case_when(
+    unit_no %in% completely_unmatched_units ~ "Unlinked",
+    TRUE ~ "Linked"
+  ))
+wo_costs %>%
+  count(unit_flag)
+
+```
+
+
+Analysis on these ghost work orders
+
+```{r}
+#How many unlinked WOs by company
+wo_costs %>%
+  filter(unit_flag == "Unlinked") %>%
+  count(company, sort = TRUE)
+
+#Most common WO reason descriptions
+wo_costs %>%
+  filter(unit_flag == "Unlinked") %>%
+  count(wo_reason_desc, sort = TRUE)
+
+#Most common WO reason descriptions
+library(ggplot2)
+
+ggplot(wo_costs %>% filter(unit_flag == "Unlinked"), aes(y = line_total)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Line Total Cost Distribution for Unlinked WOs")
+
+
+#Compare avg cost between linked and unlinked
+wo_costs %>%
+  group_by(unit_flag) %>%
+  summarise(
+    avg_cost = mean(line_total, na.rm = TRUE),
+    median_cost = median(line_total, na.rm = TRUE),
+    count = n()
+  )
+
+
+
+#. Unlinked work orders by year
+wo_costs %>%
+  filter(unit_flag == "Unlinked") %>%
+  mutate(open_year = lubridate::year(as.Date(open_date, format = "%m/%d/%y"))) %>%
+  count(open_year, sort = TRUE)
+
+#Top units causing unlinked WOs
+
+wo_costs %>%
+  filter(unit_flag == "Unlinked") %>%
+  count(unit_no, sort = TRUE) %>%
+  slice_head(n = 10)
+
+
+```
+
+Financial Relevance: Higher average cost and total volume means they impact cost-based forecasting and budgeting models.
+
+Analytical Completeness: Excluding them would bias the model by underestimating total operational costs.
+
+Root Cause Discovery: Their existence can help identify data quality or workflow gaps in asset tracking.
+
+Data Quality	Thousands of routine WOs lack asset linkage	Weakens accountability, audit, and asset ROI
+
+Company Process	Company A leads in ghost WOs	Needs stronger alignment between PM system and asset registry
+
+Maintenance Planning	Most ghost WOs are PLANNED	Preventive systems are executing without clear asset targeting
+
+Cost Leakage	$27M+ in ghost WOs	Asset-level cost optimization becomes incomplete and misleading
+
+
+```{r}
+unlinked_wos <- wo_costs %>%
+  filter(unit_flag == "Unlinked")
+
+unlinked_wos %>%
+  count(company, wo_reason_desc, sort = TRUE)
+
+unlinked_wos %>%
+  group_by(wo_reason_desc) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE),
+            count = n()) %>%
+  arrange(desc(avg_cost))
+
+library(cluster)
+
+# Select numeric features and scale them
+cluster_data <- unlinked_wos %>%
+  select(line_total, labor_amount, part_amount) %>%
+  drop_na() %>%
+  scale()
+
+# K-means clustering (try 3–5 clusters)
+set.seed(123)
+k3 <- kmeans(cluster_data, centers = 3)
+
+# Append cluster back
+unlinked_wos$cluster <- k3$cluster
+
+library(ggplot2)
+
+ggplot(unlinked_wos, aes(x = labor_amount, y = part_amount, color = as.factor(cluster))) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Clusters of Unlinked WOs", color = "Cluster")
+
+
+```
+
+
+
+assets which are there in each dataset:
+
+```{r}
+# Get unique unit numbers from each dataset
+units_wo     <- unique(wo_costs$unit_no)
+units_asset  <- unique(asset_details$unit_no)
+units_usage  <- unique(usage_data$unit_no)
+
+# Find common units in all three datasets
+common_units <- Reduce(intersect, list(units_wo, units_asset, units_usage))
+
+# Count and preview
+length(common_units)        # Number of common assets
+head(common_units, 10)      # Preview a few common unit_nos
+
+```
+
+
+```{r}
+library(dplyr)
+
+# Unique assets in asset_details
+unique_assets_asset <- n_distinct(asset_details$unit_no)
+cat("Unique assets in asset_details:", unique_assets_asset, "\n")
+
+# Unique assets in usage_data
+unique_assets_usage <- n_distinct(usage_data$unit_no)
+cat("Unique assets in usage_data:", unique_assets_usage, "\n")
+
+```
+
+
+
+```{r}
+
+
+# Step 1: Join work orders with asset details
+merged_1 <- wo_costs %>%
+  left_join(asset_details, by = "unit_no")
+
+# Step 2: Then join with usage data
+merged_final <- merged_1 %>%
+  left_join(usage_data, by = "unit_no")
+
+# Step 3: Filter to valid rows (remove those with missing key values if needed)
+merged_final <- merged_final
+
+```
+unique asstes in each and total dataset
+```{r}
+sapply(merged_final, function(x) sum(is.na(x)))
+
+# Number of unique assets in merged_final
+length(unique(merged_final$unit_no))
+
+# Count unique unit_no values in each dataset
+unique_assets_wo <- length(unique(wo_costs$unit_no))
+unique_assets_asset <- length(unique(asset_details$unit_no))
+unique_assets_usage <- length(unique(usage_data$unit_no))
+
+# Display the counts
+cat("Unique assets in wo_costs     :", unique_assets_wo, "\n")
+cat("Unique assets in asset_details:", unique_assets_asset, "\n")
+cat("Unique assets in usage_data   :", unique_assets_usage, "\n")
+
+# Standardize column names if needed
+# asset_details <- asset_details %>% rename(unit_no = unit_number)
+
+# Find unique unit_no values
+units_asset <- unique(asset_details$unit_no)
+units_wo <- unique(wo_costs$unit_no)
+
+# Find common assets
+common_asset_wo <- intersect(units_asset, units_wo)
+
+# Count of common assets
+length(common_asset_wo)
+
+```
+
+
+Imputation for missing values:
+
+```{r}
+#Numeric Fields: Use Median or Grouped Median
+merged_final <- merged_final %>%
+  mutate(
+    miles_driven = ifelse(is.na(miles_driven), median(miles_driven, na.rm = TRUE), miles_driven),
+    meter = ifelse(is.na(meter), median(meter, na.rm = TRUE), meter),
+    labor_amount = ifelse(is.na(labor_amount), median(labor_amount, na.rm = TRUE), labor_amount),
+    part_amount = ifelse(is.na(part_amount), median(part_amount, na.rm = TRUE), part_amount)
+  )
+
+# Categorical Fields: Replace with 'Unknown
+
+library(forcats)
+
+merged_final <- merged_final %>%
+  mutate(
+    make = fct_explicit_na(make, na_level = "Unknown"),
+    model = fct_explicit_na(model, na_level = "Unknown"),
+    category = fct_explicit_na(category, na_level = "Unknown"),
+    asset_type = fct_explicit_na(asset_type, na_level = "Unknown")
+  )
+
+#Create Flags for Missingness (optional for modeling)
+merged_final <- merged_final %>%
+  mutate(
+    is_miles_driven_missing = ifelse(is.na(miles_driven), 1, 0),
+    is_model_missing = ifelse(is.na(model), 1, 0)
+  )
+
+#Impute Dates with First or Median Value (if needed)
+median_date <- median(merged_final$asset_in_service_date, na.rm = TRUE)
+merged_final <- merged_final %>%
+  mutate(asset_in_service_date = ifelse(is.na(asset_in_service_date), median_date, asset_in_service_date))
+
+
+```
+```{r}
+sapply(merged_final, function(x) sum(is.na(x)))
+
+
+```
+
+Impute Remaining Missing Values
+```{r}
+library(dplyr)
+library(forcats)
+
+merged_final <- merged_final %>%
+  mutate(
+    # Numeric imputations
+    miles_driven = ifelse(is.na(miles_driven), median(miles_driven, na.rm = TRUE), miles_driven),
+    meter = ifelse(is.na(meter), median(meter, na.rm = TRUE), meter),
+    model_year = ifelse(is.na(model_year), median(model_year, na.rm = TRUE), model_year),
+    
+    # Categorical imputations
+    make = fct_explicit_na(make, na_level = "Unknown"),
+    model = fct_explicit_na(model, na_level = "Unknown"),
+    asset_type = fct_explicit_na(asset_type, na_level = "Unknown"),
+    utilization_flag = fct_explicit_na(utilization_flag, na_level = "Unknown"),
+    
+    # Date imputations (example)
+    asset_disposal_date = ifelse(is.na(asset_disposal_date), as.Date("2099-12-31"), asset_disposal_date)
+  )
+
+```
+
+
+```{r}
+sapply(merged_final, function(x) sum(is.na(x)))
+
+
+```
+
+Remove repeated variables
+```{r}
+merged_final <- merged_final %>%
+  select(
+    -company.y,
+    -category_class_desc,   # If it's repeated
+    -year.y,
+    -in_service_date,
+    -disposal_date,
+    -unit_number            # if you already have unit_no
+  )
+
+```
+
+```{r}
+sapply(merged_final, function(x) sum(is.na(x)))
+
+
+```
+
+Impute Only Where Needed + Add Missing Flags
+
+
+```{r}
+merged_final <- merged_final %>%
+  mutate(
+    months_with_mileage = ifelse(is.na(months_with_mileage), 0, months_with_mileage),
+    annualized_mileage = ifelse(is.na(annualized_mileage), 0, annualized_mileage),
+    utilized_days_per_month = ifelse(is.na(utilized_days_per_month), 0, utilized_days_per_month),
+    expected_annual_mileage = ifelse(is.na(expected_annual_mileage), 0, expected_annual_mileage),
+    mileage_gap = ifelse(is.na(mileage_gap), 0, mileage_gap),
+    utilization_flag = fct_explicit_na(utilization_flag, na_level = "Unknown")
+  )
+
+```
+
+
+```{r}
+sapply(merged_final, function(x) sum(is.na(x)))
+
+
+```
+
+Check Quality of Imputation
+
+```{r}
+#Check Proportion of Imputed Values
+mean(merged_final$is_usage_missing)
+
+#Visualize Imputed vs. Original Distributions
+# Compare before/after for numeric variables (example: annualized_mileage)
+library(ggplot2)
+
+# Distribution of imputed values (likely 0)
+ggplot(merged_final, aes(x = annualized_mileage)) +
+  geom_histogram(binwidth = 1000, fill = "steelblue", color = "white") +
+  labs(title = "Distribution After Imputation: Annualized Mileage", x = "Annualized Mileage", y = "Count")
+
+#Cross-Tab Categorical Fills
+table(merged_final$utilization_flag)
+
+#Correlation Check (Optional)
+cor(merged_final$annualized_mileage, merged_final$line_total, use = "complete.obs")
+
+```
+
+
+Better Imputation Strategies
+```{r}
+#Use Domain-Aware Imputation for Usage Data
+
+# Example: Median Imputation by asset_type or category
+merged_final <- merged_final %>%
+  group_by(asset_type) %>%
+  mutate(
+    annualized_mileage = ifelse(is.na(annualized_mileage),
+                                 median(annualized_mileage, na.rm = TRUE),
+                                 annualized_mileage),
+    utilized_days_per_month = ifelse(is.na(utilized_days_per_month),
+                                     median(utilized_days_per_month, na.rm = TRUE),
+                                     utilized_days_per_month)
+  ) %>%
+  ungroup()
+
+
+#Predictive Imputation (Optional Advanced)
+#Use a regression model to predict missing values:
+# Only run this on rows with non-missing values
+train_usage <- merged_final %>%
+  filter(!is.na(annualized_mileage))
+
+model_mileage <- lm(annualized_mileage ~ meter + year.x + make + model, data = train_usage)
+
+
+#Recalculate Utilization Flags After Imputation
+
+# Predict for missing ones
+merged_final$annualized_mileage[is.na(merged_final$annualized_mileage)] <-
+  predict(model_mileage, newdata = merged_final[is.na(merged_final$annualized_mileage), ])
+
+merged_final <- merged_final %>%
+  mutate(
+    utilization_flag = case_when(
+      annualized_mileage >= 25000 ~ "Highly Overutilized",
+      annualized_mileage >= 15000 ~ "Moderately Overutilized",
+      annualized_mileage >= 10000 ~ "Normal",
+      annualized_mileage >= 5000  ~ "Moderately Underutilized",
+      annualized_mileage > 0      ~ "Highly Underutilized",
+      TRUE                        ~ "Unknown"
+    )
+  )
+
+
+```
+
+
+```{r}
+#Check Proportion of Imputed Values
+mean(merged_final$is_usage_missing)
+
+#Visualize Imputed vs. Original Distributions
+# Compare before/after for numeric variables (example: annualized_mileage)
+library(ggplot2)
+
+# Distribution of imputed values (likely 0)
+ggplot(merged_final, aes(x = annualized_mileage)) +
+  geom_histogram(binwidth = 1000, fill = "steelblue", color = "white") +
+  labs(title = "Distribution After Imputation: Annualized Mileage", x = "Annualized Mileage", y = "Count")
+
+#Cross-Tab Categorical Fills
+table(merged_final$utilization_flag)
+
+#Correlation Check (Optional)
+cor(merged_final$annualized_mileage, merged_final$line_total, use = "complete.obs")
+```
+
+
+
+
+
+Actual predicitve model building 
+
+
+
+```{r}
+# Get variable names based on type
+numeric_vars <- names(merged_final)[sapply(merged_final, is.numeric)]
+categorical_vars <- names(merged_final)[sapply(merged_final, function(x) is.character(x) || is.factor(x))]
+
+library(dplyr)
+
+numeric_results <- lapply(numeric_vars, function(var) {
+  tryCatch({
+    x <- merged_final[[var]]
+    y <- merged_final$high_cost_flag
+    x <- x[!is.na(x) & !is.na(y)]
+    y <- y[!is.na(x) & !is.na(y)]
+    test <- t.test(x ~ y)
+    data.frame(variable = var, p_value = test$p.value)
+  }, error = function(e) {
+    data.frame(variable = var, p_value = NA)
+  })
+}) %>% bind_rows()
+
+categorical_results <- lapply(categorical_vars, function(var) {
+  tryCatch({
+    tbl <- table(merged_final[[var]], merged_final$high_cost_flag)
+    if (nrow(tbl) > 1 && ncol(tbl) > 1) {
+      test <- chisq.test(tbl)
+      data.frame(variable = var, p_value = test$p.value)
+    } else {
+      data.frame(variable = var, p_value = NA)
+    }
+  }, error = function(e) {
+    data.frame(variable = var, p_value = NA)
+  })
+}) %>% bind_rows()
+
+all_significance_results <- bind_rows(
+  numeric_results %>% mutate(type = "numeric"),
+  categorical_results %>% mutate(type = "categorical")
+)
+
+
+
+```
+
+```{r}
+
+all_significance_results %>%
+  filter(p_value < 0.05)
+
+```
+
+
+
+```{r}
+
+```
+
+
+```{r}
+library(dplyr)
+
+# Assuming your merged dataset is named `merged_data`
+
+# 1. Unique values in miles_driven
+unique_miles <- unique(merged_data$miles_driven)
+cat("Number of unique values in miles_driven:", length(unique_miles), "\n")
+
+# 2. Top 10 most frequent miles driven values
+#top_miles <- merged_data %>%
+ # count(miles_driven, sort = TRUE) %>%
+#  slice_head(n = 10)
+
+#print(top_miles)
+
+
+```
+

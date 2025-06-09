@@ -1,0 +1,1443 @@
+---
+title: "LModel"
+author: "Sourah R"
+date: "2025-05-31"
+output: html_document
+---
+
+
+
+
+
+
+
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(forcats)
+library(lubridate)
+
+# Re-import clean data
+final_merged_data <- read_csv("/Users/HP/Downloads/final_merged_data.csv", show_col_types = FALSE)
+
+# Convert date columns
+final_merged_data <- final_merged_data %>%
+  mutate(
+    `IN SERVICE DATE` = as.Date(`IN SERVICE DATE`),
+    `DISPOSAL DATE` = as.Date(`DISPOSAL DATE`),
+    `Open Date` = as.Date(`Open Date`),
+    `WO Completed Date` = as.Date(`WO Completed Date`)
+  )
+
+# Feature engineering
+final_merged_data <- final_merged_data %>%
+  mutate(
+    Repair_Duration = as.numeric(`WO Completed Date` - `Open Date`),
+    Vehicle_Age = year(`Open Date`) - `Model Year`
+  )
+
+
+
+```
+
+
+
+```{r}
+final_merged_data <- final_merged_data %>%
+  mutate(
+    MAKE = fct_lump(as.factor(MAKE), n = 20),
+    MODEL = fct_lump(as.factor(MODEL), n = 20),
+    `WO Reason Desc` = as.factor(`WO Reason Desc`),
+    `Job Description` = as.factor(`Job Description`),
+    `Job Reason Description` = as.factor(`Job Reason Description`),
+    Damage = as.factor(Damage),
+    `Maint Loc` = as.factor(`Maint Loc`),
+    CATEGORY = as.factor(CATEGORY),
+    CATEGORY_CLASS_DESC = as.factor(CATEGORY_CLASS_DESC),
+    `Asset Type - Asset Type` = as.factor(`Asset Type - Asset Type`)
+  )
+
+final_merged_data <- droplevels(final_merged_data)
+
+```
+
+
+
+
+```{r}
+# Build the model
+model2 <- lm(
+  `Line Total` ~ YEAR + MAKE + MODEL + `Asset Type - Asset Type` + `Model Year` +
+    `Miles Driven` + Meter + `Annualized Mileage` +
+    `WO Reason Desc` + `Job Description` + `Job Reason Description` +
+    Damage + `Maint Loc` + CATEGORY + CATEGORY_CLASS_DESC +
+    Repair_Duration + Vehicle_Age,
+  data = final_merged_data
+)
+
+# Align factor levels with the model
+for (col_name in names(model2$xlevels)) {
+  final_merged_data[[col_name]] <- factor(
+    final_merged_data[[col_name]], 
+    levels = model2$xlevels[[col_name]]  # Use levels from model training
+  )
+}
+
+# Predict
+final_merged_data$predicted_line_total <- predict(model2, newdata = final_merged_data)
+
+```
+
+
+```{r}
+library(dplyr)
+library(data.table)
+library(dplyr)
+
+# Convert to data.table for memory efficiency
+setDT(final_merged_data)
+
+# Identify factor variables used in the model
+factor_vars <- names(model2$xlevels)
+
+# Process in chunks to conserve memory
+chunk_size <- 10000  # Adjust based on your system memory
+n_chunks <- ceiling(nrow(final_merged_data) / chunk_size)
+
+# Create prediction vector
+predictions <- numeric(nrow(final_merged_data))
+
+for (i in 1:n_chunks) {
+    cat("Processing chunk", i, "of", n_chunks, "\n")
+    
+    # Get chunk indices
+    start_row <- (i - 1) * chunk_size + 1
+    end_row <- min(i * chunk_size, nrow(final_merged_data))
+    chunk_indices <- start_row:end_row
+    
+    # Create working chunk
+    chunk <- final_merged_data[chunk_indices]
+    
+    # Process factor levels for this chunk
+    for (var in factor_vars) {
+        if (var %in% names(chunk)) {
+            train_levels <- model2$xlevels[[var]]
+            chunk[, (var) := {
+                x <- get(var)
+                # Convert to character to avoid factor overhead
+                if (is.factor(x)) x <- as.character(x)
+                # Set new levels to NA
+                x[!x %in% train_levels] <- NA
+                # Convert to factor with model's levels
+                factor(x, levels = train_levels)
+            }]
+        }
+    }
+    
+    # Predict for this chunk
+    predictions[chunk_indices] <- predict(model2, newdata = chunk)
+    
+    # Explicitly remove chunk to free memory
+    rm(chunk)
+    gc()  # Force garbage collection
+}
+
+# Add predictions to main data
+final_merged_data[, predicted_line_total := predictions]
+```
+
+
+```{r}
+# Check WO Completed Date range
+summary(final_merged_data$`WO Completed Date`)
+
+# Check if predictions exist
+summary(final_merged_data$predicted_line_total)
+
+# Count rows by year
+table(lubridate::year(final_merged_data$`WO Completed Date`))
+
+# Check a few rows
+head(final_merged_data[, .(`WO Completed Date`, predicted_line_total)])
+
+```
+
+```{r}
+str(monthly_summary)
+print(monthly_summary)
+
+```
+
+
+ Overall Distribution
+```{r}
+library(ggplot2)
+ggplot(final_merged_data, aes(x = predicted_line_total)) +
+  geom_histogram(fill = "steelblue", bins = 50) +
+  labs(title = "Distribution of Predicted Line Totals", x = "Predicted Cost", y = "Count") +
+  theme_minimal()
+
+```
+
+ Actual vs Predicted (Work Order Level)
+```{r}
+library(tidyr)
+library(ggplot2)
+
+# Create long format for ggplot
+plot_data <- final_merged_data %>%
+  select(`Line Total`, predicted_line_total) %>%
+  rename(Actual = `Line Total`, Predicted = predicted_line_total) %>%
+  pivot_longer(cols = c(Actual, Predicted), names_to = "Type", values_to = "Value") %>%
+  mutate(Index = row_number())
+
+# Plot: Index vs Value, color = Actual or Predicted
+ggplot(plot_data, aes(x = Index, y = Value, color = Type)) +
+  geom_point(alpha = 0.4) +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Actual vs Predicted Line Totals",
+    x = "Index (Work Order)",
+    y = "Line Total",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+ggplot(plot_data, aes(x = Index, y = Value, color = Type)) +
+  geom_point(alpha = 0.3) +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  scale_y_log10() +
+  labs(
+    title = "Actual vs Predicted Line Totals (Log Scale)",
+    x = "Index (Work Order)",
+    y = "Line Total (log scale)",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+ggplot(plot_data, aes(x = Index, y = Value, color = Type)) +
+  geom_smooth(se = FALSE, size = 1.2) +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Smoothed Trend: Actual vs Predicted Line Totals",
+    x = "Index (Work Order)",
+    y = "Line Total",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+sampled_data <- plot_data %>% sample_n(5000)
+
+ggplot(sampled_data, aes(x = Index, y = Value, color = Type)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+  labs(
+    title = "Actual vs Predicted Line Totals (Sampled)",
+    x = "Index (Work Order)",
+    y = "Line Total",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+Aggregate to Asset Level
+```{r}
+library(dplyr)
+
+asset_level_summary <- final_merged_data %>%
+  group_by(`UNIT NUMBER`) %>%
+  summarize(
+    total_predicted_cost = sum(predicted_line_total, na.rm = TRUE),
+    total_actual_cost = sum(`Line Total`, na.rm = TRUE),
+    avg_repair_duration = mean(Repair_Duration, na.rm = TRUE),
+    work_order_count = n(),
+    .groups = "drop"
+  )
+
+```
+
+
+```{r}
+library(ggplot2)
+
+ggplot(asset_level_summary, aes(x = total_actual_cost, y = total_predicted_cost)) +
+  geom_point(alpha = 0.6, color = "darkorange") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Asset-Level: Actual vs Predicted Total Cost",
+    x = "Actual Total Cost per Asset",
+    y = "Predicted Total Cost per Asset"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+library(tidyr)
+library(dplyr)
+
+asset_plot_data <- asset_level_summary %>%
+  select(`UNIT NUMBER`, total_actual_cost, total_predicted_cost) %>%
+  pivot_longer(cols = c(total_actual_cost, total_predicted_cost), names_to = "Type", values_to = "Value") %>%
+  mutate(Index = row_number())
+
+ggplot(asset_plot_data, aes(x = Index, y = Value, color = Type)) +
+  geom_point(alpha = 0.4) +
+  scale_color_manual(values = c("total_actual_cost" = "blue", "total_predicted_cost" = "red")) +
+  labs(
+    title = "Asset-Level: Actual (Blue) vs Predicted (Red) Costs",
+    x = "Index (Asset)",
+    y = "Total Cost",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+ggplot(asset_level_summary, aes(x = total_actual_cost, y = total_predicted_cost)) +
+  geom_point(alpha = 0.2, color = "gray50") +
+  geom_smooth(method = "loess", color = "darkred", se = FALSE, size = 1.5) +
+  labs(
+    title = "Smoothed Trend: Actual vs Predicted (Asset Level)",
+    x = "Actual Total Cost per Asset",
+    y = "Predicted Total Cost per Asset"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Prepare data in long format for ggplot
+asset_plot_data <- asset_level_summary %>%
+  select(`UNIT NUMBER`, total_actual_cost, total_predicted_cost) %>%
+  pivot_longer(cols = c(total_actual_cost, total_predicted_cost),
+               names_to = "Type", values_to = "Value") %>%
+  mutate(Index = row_number())  # This gives each asset a unique index for X-axis
+
+# Smoothed line plot
+ggplot(asset_plot_data, aes(x = Index, y = Value, color = Type)) +
+  geom_smooth(se = FALSE, size = 1.4) +
+  scale_color_manual(values = c("total_actual_cost" = "blue", "total_predicted_cost" = "red"),
+                     labels = c("Actual", "Predicted")) +
+  labs(
+    title = "Smoothed Trend: Actual vs Predicted Total Cost per Asset",
+    x = "Index (Asset)",
+    y = "Total Cost",
+    color = "Type"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Prepare long format data for faceting
+asset_plot_data <- asset_level_summary %>%
+  select(`UNIT NUMBER`, total_actual_cost, total_predicted_cost) %>%
+  rename(Actual = total_actual_cost, Predicted = total_predicted_cost) %>%
+  pivot_longer(cols = c(Actual, Predicted), names_to = "Type", values_to = "Value") %>%
+  mutate(Index = row_number())
+
+# Scatter plot faceted by Type
+ggplot(asset_plot_data, aes(x = Index, y = Value)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  facet_wrap(~ Type, ncol = 2, scales = "free_y") +
+  labs(
+    title = "Asset-Level Cost Comparison: Actual vs Predicted",
+    x = "Asset Index",
+    y = "Total Cost"
+  ) +
+  theme_minimal()
+
+```
+
+
+Add Time Info to asset_level_summary
+
+```{r}
+library(lubridate)
+library(dplyr)
+
+# Example: Get the most recent work order date per asset
+asset_time_summary <- final_merged_data %>%
+  mutate(Open_Date = as.Date(`Open Date`)) %>%
+  group_by(`UNIT NUMBER`) %>%
+  summarize(
+    last_service_date = max(Open_Date, na.rm = TRUE),
+    total_actual_cost = sum(`Line Total`, na.rm = TRUE),
+    total_predicted_cost = sum(predicted_line_total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+```{r}
+library(ggplot2)
+library(tidyr)
+
+# Convert to long format for faceting
+plot_data <- asset_time_summary %>%
+  pivot_longer(cols = c(total_actual_cost, total_predicted_cost),
+               names_to = "Type", values_to = "Value")
+
+# Plot: scatter + smoothed trend line
+ggplot(plot_data, aes(x = last_service_date, y = Value)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_smooth(method = "loess", se = FALSE, color = "darkred", size = 1.1) +
+  facet_wrap(~ Type, ncol = 2, scales = "free_y") +
+  labs(
+    title = "Asset-Level Actual vs Predicted Cost Over Time",
+    x = "Month",
+    y = "Total Cost"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+
+
+
+
+
+```{r}
+# Fix negative values before strategy assignment
+library(dplyr)
+
+# Step 1: Aggregate to Asset Level
+asset_level_summary <- final_merged_data %>%
+  mutate(Open_Date = as.Date(`Open Date`)) %>%
+  group_by(`UNIT NUMBER`) %>%
+  summarize(
+    total_predicted_cost = sum(predicted_line_total, na.rm = TRUE),
+    total_actual_cost = sum(`Line Total`, na.rm = TRUE),
+    avg_repair_duration = mean(Repair_Duration, na.rm = TRUE),
+    work_order_count = n(),
+    last_service_date = max(Open_Date, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Step 2: Replace invalid values with 0
+  mutate(
+    total_predicted_cost = ifelse(total_predicted_cost < 0, 0, total_predicted_cost),
+    avg_repair_duration = ifelse(avg_repair_duration < 0, 0, avg_repair_duration)
+  )
+
+# Step 3: Assign strategies using cleaned data
+Q3_cost <- quantile(asset_level_summary$total_predicted_cost, 0.75, na.rm = TRUE)
+Q2_cost <- quantile(asset_level_summary$total_predicted_cost, 0.50, na.rm = TRUE)
+Q3_dur <- quantile(asset_level_summary$avg_repair_duration, 0.75, na.rm = TRUE)
+Q2_dur <- quantile(asset_level_summary$avg_repair_duration, 0.50, na.rm = TRUE)
+
+asset_strategies <- asset_level_summary %>%
+  mutate(
+    strategy = case_when(
+      total_predicted_cost > Q3_cost & avg_repair_duration > Q3_dur ~ "Consider Replacement",
+      total_predicted_cost > Q2_cost | avg_repair_duration > Q2_dur ~ "Monitor Closely",
+      TRUE ~ "Keep as-it is"
+    ),
+    estimated_savings = case_when(
+      strategy == "Consider Replacement" ~ total_predicted_cost * 0.25,
+      strategy == "Monitor Closely" ~ total_predicted_cost * 0.10,
+      TRUE ~ 0
+    )
+  )
+
+# Optional: generate summary table
+strategy_summary <- asset_strategies %>%
+  group_by(strategy) %>%
+  summarize(
+    Assets = n(),
+    Total_Predicted_Cost = sum(total_predicted_cost, na.rm = TRUE),
+    Avg_Repair_Duration = mean(avg_repair_duration, na.rm = TRUE),
+    Estimated_Savings = sum(estimated_savings, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(strategy_summary)
+
+```
+
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+ggplot(asset_strategies, aes(x = strategy, fill = strategy)) +
+  geom_bar() +
+  labs(title = "Asset Strategy Distribution", x = "Strategy", y = "Number of Assets") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Consider Replacement" = "red", "Monitor Closely" = "orange", "Keep as-it is" = "steelblue"))
+
+```
+
+
+
+
+
+```{r}
+strategy_summary <- asset_strategies %>%
+  group_by(strategy) %>%
+  summarize(
+    Assets = n(),
+    Total_Predicted_Cost = sum(pmax(total_predicted_cost, 0), na.rm = TRUE),
+    Avg_Repair_Duration = mean(pmax(avg_repair_duration, 0), na.rm = TRUE),
+    Estimated_Savings = sum(pmax(estimated_savings, 0), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Hours_Saved = round(Assets * Avg_Repair_Duration, 1))
+
+library(formattable)
+
+compact_style <- function(color) {
+  formatter("span",
+    style = x ~ style(
+      display = "inline-block",
+      padding = "1px 4px",
+      `border-radius` = "4px",
+      `font-size` = "12px",
+      `background-color` = color
+    )
+  )
+}
+
+formattable(strategy_summary, list(
+  Assets = compact_style("lightblue"),
+  Total_Predicted_Cost = compact_style("lightgreen"),
+  Avg_Repair_Duration = compact_style("orange"),
+  Estimated_Savings = compact_style("#90ee90"),
+  Hours_Saved = compact_style("lightpink")
+))
+
+```
+
+
+
+```{r}
+#write.csv(asset_strategies, "asset_strategies_line_total.csv", row.names = FALSE)
+
+```
+
+
+
+```{r}
+names(asset_strategies)
+
+```
+
+
+
+```{r}
+# Step 1: Create mapping from final_merged_data
+asset_company_map <- final_merged_data %>%
+  select(`UNIT NUMBER`, Company) %>%
+  distinct()
+
+# Step 2: Join with asset_strategies to add Company info
+asset_strategies <- asset_strategies %>%
+  left_join(asset_company_map, by = "UNIT NUMBER")
+
+
+```
+
+
+
+```{r}
+names(asset_strategies)
+
+
+```
+
+```{r}
+library(dplyr)
+
+# If both Company.x and Company.y exist, prioritize non-NA values
+asset_strategies <- asset_strategies %>%
+  mutate(Company = coalesce(`Company.x`, `Company.y`)) %>%
+  select(-`Company.x`, -`Company.y`)
+
+```
+
+
+```{r}
+names(asset_strategies)
+
+
+```
+
+
+```{r}
+company_summary <- asset_strategies %>%
+  filter(!is.na(Company)) %>%
+  group_by(Company) %>%
+  summarize(
+    total_predicted_cost = sum(total_predicted_cost, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_predicted_cost))
+
+```
+
+
+```{r}
+library(ggplot2)
+
+ggplot(company_summary, aes(x = reorder(Company, total_predicted_cost), 
+                            y = total_predicted_cost, fill = Company)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(
+    title = "Total Predicted Cost by Company",
+    x = "Company",
+    y = "Predicted Cost"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma)
+
+```
+
+
+
+Dashboard 
+
+```{r}
+
+# Dashboard Function with Fixed KPIs and Custom Styling
+run_strategy_dashboard <- function(asset_strategies) {
+  library(shiny)
+  library(shinydashboard)
+  library(ggplot2)
+  library(dplyr)
+  library(DT)
+
+  ui <- dashboardPage(
+    dashboardHeader(title = "Fleet Maintenance", titleWidth = 300),
+    dashboardSidebar(
+      width = 300,
+      selectInput("strategy", "Select Strategy:", 
+                  choices = c("All", unique(asset_strategies$strategy)), 
+                  selected = "All")
+    ),
+    dashboardBody(
+      tags$head(tags$style(HTML('
+        .skin-blue .main-header .logo {
+          background-color: #005b96;
+        }
+        .skin-blue .main-header .navbar {
+          background-color: #0072b2;
+        }
+        .skin-blue .main-sidebar {
+          background-color: #003f5c;
+        }
+        .skin-blue .main-sidebar .sidebar a {
+          color: #ffffff;
+        }
+        .box.box-primary {
+          border-top-color: #0072b2;
+        }
+      '))),
+
+      fluidRow(
+        valueBoxOutput("total_assets"),
+        valueBoxOutput("total_cost"),
+        valueBoxOutput("estimated_savings"),
+        valueBoxOutput("hours_saved")
+      ),
+      fluidRow(
+        box(title = "Predicted Cost by Strategy", width = 6, status = "primary", solidHeader = TRUE, plotOutput("bar_chart")),
+        box(title = "Repair Hours vs Predicted Cost (LOESS)", width = 6, status = "primary", solidHeader = TRUE, plotOutput("trend_chart"))
+      ),
+      fluidRow(
+        box(title = "Predicted Cost by Company", width = 6, status = "primary", solidHeader = TRUE, plotOutput("company_chart")),
+        box(title = "Average Repair Duration by Strategy", width = 6, status = "primary", solidHeader = TRUE, plotOutput("duration_chart"))
+      ),
+      fluidRow(
+        box(title = "Strategy Table", width = 12, status = "primary", solidHeader = TRUE, DTOutput("table"))
+      )
+    )
+  )
+
+  server <- function(input, output) {
+    filtered_data <- reactive({
+      asset_strategies %>%
+        mutate(
+          Assets = 1,
+          Total_Predicted_Cost = total_predicted_cost,
+          Avg_Repair_Duration = avg_repair_duration,
+          Estimated_Savings = estimated_savings
+        ) %>%
+        {
+          if (input$strategy == "All") . else filter(., strategy == input$strategy)
+        }
+    })
+
+    output$total_assets <- renderValueBox({
+      valueBox(formatC(sum(filtered_data()$Assets), format = "f", digits = 0, big.mark = ","),
+               "Total Assets", icon = icon("truck"), color = "aqua")
+    })
+
+    output$total_cost <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$Total_Predicted_Cost), format = "f", digits = 0, big.mark = ",")),
+               "Total Predicted Cost", icon = icon("dollar-sign"), color = "blue")
+    })
+
+    output$estimated_savings <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$Estimated_Savings), format = "f", digits = 0, big.mark = ",")),
+               "Estimated Savings", icon = icon("chart-line"), color = "green")
+    })
+
+    output$hours_saved <- renderValueBox({
+      valueBox(formatC(sum(filtered_data()$Assets * filtered_data()$Avg_Repair_Duration), format = "f", digits = 0, big.mark = ","),
+               "Estimated Hours Saved", icon = icon("clock"), color = "orange")
+    })
+
+    output$bar_chart <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy, y = Total_Predicted_Cost, fill = strategy)) +
+        geom_bar(stat = "identity") +
+        labs(x = NULL, y = "Predicted Cost") +
+        theme_minimal() +
+        theme(legend.position = "none") +
+        scale_fill_manual(values = c("Consider Replacement" = "#ff4c4c", "Monitor Closely" = "#ffa500", "Keep as-it is" = "#0072b2"))
+    })
+
+    output$trend_chart <- renderPlot({
+      ggplot(filtered_data(), aes(x = Assets * Avg_Repair_Duration, y = Total_Predicted_Cost)) +
+        geom_point(alpha = 0.3, color = "steelblue") +
+        geom_smooth(method = "loess", se = FALSE, color = "darkred") +
+        labs(x = "Total Repair Hours", y = "Predicted Cost") +
+        theme_minimal()
+    })
+
+    output$company_chart <- renderPlot({
+      df <- filtered_data() %>% filter(!is.na(Company))
+      req(nrow(df) > 0)
+
+      ggplot(df, aes(x = reorder(Company, -Total_Predicted_Cost), y = Total_Predicted_Cost, fill = Company)) +
+        geom_bar(stat = "identity") +
+        labs(x = "Company", y = "Total Predicted Cost") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        scale_fill_brewer(palette = "Set2")
+    })
+
+    output$duration_chart <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy, y = Avg_Repair_Duration, fill = strategy)) +
+        geom_bar(stat = "summary", fun = mean) +
+        labs(x = "Strategy", y = "Avg Repair Duration (hrs)") +
+        theme_minimal() +
+        scale_fill_manual(values = c("Consider Replacement" = "#ff4c4c", "Monitor Closely" = "#ffa500", "Keep as-it is" = "#0072b2"))
+    })
+
+    output$table <- renderDT({
+      datatable(filtered_data(), options = list(pageLength = 5))
+    })
+  }
+
+  shinyApp(ui, server)
+}
+
+
+
+```
+
+
+
+```{r}
+run_strategy_dashboard(asset_strategies)
+
+```
+
+
+
+
+```{r}
+names(dashboard_ready_data_01)
+```
+
+```{r}
+names(asset_strategies)
+```
+
+
+merge 
+
+```{r}
+# Standardize unit column names
+colnames(dashboard_ready_data_01)[colnames(dashboard_ready_data_01) == "unit_no"] <- "UNIT NUMBER"
+
+# Merge the two datasets
+combined_dashboard_data <- left_join(asset_strategies, dashboard_ready_data_01, by = "UNIT NUMBER")
+
+```
+
+
+
+```{r}
+names(combined_dashboard_data)
+```
+
+
+
+
+
+ Predicted Cost by Strategy (from asset_strategies side)
+```{r}
+ggplot(combined_dashboard_data, aes(x = strategy, y = total_predicted_cost, fill = strategy)) +
+  geom_bar(stat = "summary", fun = sum) +
+  labs(title = "Predicted Maintenance Cost by Strategy", x = "Strategy", y = "Total Predicted Cost") +
+  scale_fill_manual(values = c("Consider Replacement" = "#e74c3c", "Monitor Closely" = "#f39c12", "Keep as-it is" = "#3498db")) +
+  theme_minimal()
+
+```
+
+Repair Duration vs Utilization Score
+
+```{r}
+ggplot(combined_dashboard_data, aes(x = utilization_score, y = avg_repair_duration, color = risk_level)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE, method = "loess") +
+  labs(title = "Repair Duration vs Utilization Score", x = "Utilization Score", y = "Avg Repair Duration (hrs)", color = "Risk Level") +
+  theme_minimal()
+
+```
+
+
+Combined Strategic Charts
+
+
+Utilization Score vs Predicted Cost
+→ Helps identify underutilized assets driving high costs.
+```{r}
+ggplot(combined_dashboard_data, aes(x = utilization_score, y = total_predicted_cost)) +
+  geom_point(alpha = 0.5, color = "#0072B2") +
+  geom_smooth(method = "loess", se = FALSE, color = "#D55E00") +
+  labs(
+    title = "Utilization Score vs Predicted Maintenance Cost",
+    x = "Utilization Score",
+    y = "Total Predicted Cost"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+Strategy vs Risk Level (Stacked Count)
+→ Shows how well strategies align with risk classification.
+
+
+
+```{r}
+ggplot(combined_dashboard_data, aes(x = strategy, fill = risk_level)) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Strategy Distribution by Risk Level",
+    x = "Strategy",
+    y = "Proportion",
+    fill = "Risk Level"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+Expected Time Savings vs Strategy
+→ Shows how time-saving potential is distributed across strategic actions.
+
+```{r}
+ggplot(combined_dashboard_data, aes(x = strategy, y = expected_time_savings_hours, fill = strategy)) +
+  geom_boxplot() +
+  labs(
+    title = "Time Savings Distribution Across Strategies",
+    x = "Strategy",
+    y = "Expected Time Savings (Hours)"
+  ) +
+  scale_fill_manual(values = c("Consider Replacement" = "#e74c3c", "Monitor Closely" = "#f39c12", "Keep as-it is" = "#3498db")) +
+  theme_minimal()
+
+```
+
+
+
+4. High-Cost Risk Map: Risk Level vs Predicted Cost (Color = Confidence)
+→ A heatmap view to target high-cost, high-risk, high-certainty assets.
+
+```{r}
+ggplot(combined_dashboard_data, aes(x = risk_level, y = total_predicted_cost, color = confidence_level)) +
+  geom_jitter(alpha = 0.5, width = 0.2) +
+  scale_color_gradient(low = "#a6cee3", high = "#1f78b4") +
+  labs(
+    title = "High-Cost Risk Map",
+    x = "Risk Level",
+    y = "Predicted Cost",
+    color = "Confidence"
+  ) +
+  theme_minimal()
+
+```
+
+
+
+```{r}
+# Dashboard Function with Fixed KPIs and Custom Styling
+run_strategy_dashboard <- function(asset_strategies) {
+  library(shiny)
+  library(shinydashboard)
+  library(ggplot2)
+  library(dplyr)
+  library(DT)
+
+  ui <- dashboardPage(
+    dashboardHeader(title = "Fleet Maintenance", titleWidth = 300),
+    dashboardSidebar(
+      width = 300,
+      selectInput("strategy", "Select Strategy:", 
+                  choices = c("All", unique(asset_strategies$strategy)), 
+                  selected = "All")
+    ),
+    dashboardBody(
+      tags$head(tags$style(HTML('
+        .skin-blue .main-header .logo {
+          background-color: #005b96;
+        }
+        .skin-blue .main-header .navbar {
+          background-color: #0072b2;
+        }
+        .skin-blue .main-sidebar {
+          background-color: #003f5c;
+        }
+        .skin-blue .main-sidebar .sidebar a {
+          color: #ffffff;
+        }
+        .box.box-primary {
+          border-top-color: #0072b2;
+        }
+      '))),
+
+      fluidRow(
+        valueBoxOutput("total_assets"),
+        valueBoxOutput("total_cost"),
+        valueBoxOutput("estimated_savings"),
+        valueBoxOutput("hours_saved")
+      ),
+      fluidRow(
+        box(title = "Strategy vs Impact Summary", width = 12, status = "primary", solidHeader = TRUE, plotOutput("combined_impact_plot"))
+      ),
+      fluidRow(
+        box(title = "Utilization vs Risk-Cost Dynamics", width = 12, status = "primary", solidHeader = TRUE, plotOutput("combined_utilization_plot"))
+      ),
+      fluidRow(
+        box(title = "Strategy Table", width = 12, status = "primary", solidHeader = TRUE, DTOutput("table"))
+      )
+    )
+  )
+
+  server <- function(input, output) {
+    filtered_data <- reactive({
+      asset_strategies %>%
+        mutate(
+          Assets = 1,
+          Total_Predicted_Cost = total_predicted_cost,
+          Avg_Repair_Duration = avg_repair_duration,
+          Estimated_Savings = estimated_savings
+        ) %>%
+        {
+          if (input$strategy == "All") . else filter(., strategy == input$strategy)
+        }
+    })
+
+    output$total_assets <- renderValueBox({
+      valueBox(formatC(sum(filtered_data()$Assets), format = "f", digits = 0, big.mark = ","),
+               "Total Assets", icon = icon("truck"), color = "aqua")
+    })
+
+    output$total_cost <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$Total_Predicted_Cost), format = "f", digits = 0, big.mark = ",")),
+               "Total Predicted Cost", icon = icon("dollar-sign"), color = "blue")
+    })
+
+    output$estimated_savings <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$Estimated_Savings), format = "f", digits = 0, big.mark = ",")),
+               "Estimated Savings", icon = icon("chart-line"), color = "green")
+    })
+
+    output$hours_saved <- renderValueBox({
+      valueBox(formatC(sum(filtered_data()$Assets * filtered_data()$Avg_Repair_Duration), format = "f", digits = 0, big.mark = ","),
+               "Estimated Hours Saved", icon = icon("clock"), color = "orange")
+    })
+
+    output$combined_impact_plot <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy)) +
+        geom_col(aes(y = Total_Predicted_Cost, fill = "Predicted Cost"), position = "dodge") +
+        geom_col(aes(y = Assets * Avg_Repair_Duration, fill = "Hours Saved"), position = "dodge") +
+        geom_col(aes(y = Estimated_Savings, fill = "Estimated Savings"), position = "dodge") +
+        labs(title = "Strategy vs Impact Summary", y = "Value", x = "Strategy", fill = "Metric") +
+        theme_minimal() +
+        scale_fill_manual(values = c("Predicted Cost" = "#377eb8", "Hours Saved" = "#ff7f00", "Estimated Savings" = "#4daf4a"))
+    })
+
+    output$combined_utilization_plot <- renderPlot({
+      req("utilization_score" %in% names(filtered_data()) && "total_predicted_cost" %in% names(filtered_data()))
+      ggplot(filtered_data(), aes(x = utilization_score, y = total_predicted_cost, color = risk_level)) +
+        geom_point(alpha = 0.4) +
+        geom_smooth(method = "loess", se = FALSE, color = "darkred") +
+        labs(title = "Utilization vs Risk-Cost Dynamics", x = "Utilization Score", y = "Predicted Cost") +
+        facet_wrap(~ Company, scales = "free") +
+        theme_minimal()
+    })
+
+    output$table <- renderDT({
+      datatable(filtered_data(), options = list(pageLength = 5))
+    })
+  }
+
+  shinyApp(ui, server)
+}
+
+```
+
+```{r}
+run_strategy_dashboard(asset_strategies)
+
+```
+
+```{r}
+names(combined_dashboard_data)
+```
+
+
+final combined dashboard
+```{r}
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(dplyr)
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Fleet Maintenance Dashboard"),
+  dashboardSidebar(
+    selectInput("company", "Select Company:", choices = NULL, selected = "All"),
+    selectInput("risk", "Select Risk Level:", choices = NULL, selected = "All"),
+    selectInput("strategy", "Select Strategy:", choices = NULL, selected = "All")
+  ),
+  dashboardBody(
+    fluidRow(
+      valueBoxOutput("costSavings"),
+      valueBoxOutput("avgConfidence"),
+      valueBoxOutput("highRiskAssets"),
+      valueBoxOutput("avgRepairDuration")
+    ),
+    fluidRow(
+      box(title = "Asset Count by Strategy", width = 6, solidHeader = TRUE, status = "primary",
+          plotOutput("strategyBar")),
+      box(title = "Confidence by Risk Level", width = 6, solidHeader = TRUE, status = "primary",
+          plotOutput("confidenceBox"))
+    ),
+    fluidRow(
+      box(title = "Risk Rate vs Utilization Score", width = 6, solidHeader = TRUE, status = "primary",
+          plotOutput("riskUtilScatter")),
+      box(title = "Strategy vs Confidence Heatmap", width = 6, solidHeader = TRUE, status = "primary",
+          plotOutput("heatmap"))
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  # Assuming `combined_dashboard_data` is preloaded
+  raw_data <- reactive({
+    combined_dashboard_data
+  })
+
+  observe({
+    df <- raw_data()
+    updateSelectInput(session, "company", choices = c("All", sort(unique(df$company))), selected = "All")
+    updateSelectInput(session, "risk", choices = c("All", sort(unique(df$risk_level))), selected = "All")
+    updateSelectInput(session, "strategy", choices = c("All", sort(unique(df$strategy_2025))), selected = "All")
+  })
+
+  filtered_data <- reactive({
+    df <- raw_data()
+    if (input$company != "All") df <- df[df$company == input$company, ]
+    if (input$risk != "All") df <- df[df$risk_level == input$risk, ]
+    if (input$strategy != "All") df <- df[df$strategy_2025 == input$strategy, ]
+    df
+  })
+
+  # KPIs
+  output$costSavings <- renderValueBox({
+    valueBox(
+      paste0("$", format(round(sum(filtered_data()$expected_cost_savings, na.rm = TRUE)/1e6, 2), nsmall = 2), "M"),
+      "Expected Cost Savings",
+      icon = icon("dollar-sign"), color = "green"
+    )
+  })
+
+  output$avgConfidence <- renderValueBox({
+    valueBox(
+      round(mean(filtered_data()$avg_prediction_probability, na.rm = TRUE), 2),
+      "Avg. Confidence",
+      icon = icon("percent"), color = "aqua"
+    )
+  })
+
+  output$highRiskAssets <- renderValueBox({
+    count <- sum(filtered_data()$risk_level == "High", na.rm = TRUE)
+    valueBox(count, "High-Risk Assets", icon = icon("exclamation-triangle"), color = "red")
+  })
+
+  output$avgRepairDuration <- renderValueBox({
+    valueBox(
+      round(mean(filtered_data()$avg_repair_duration, na.rm = TRUE), 1),
+      "Avg. Repair Duration (days)",
+      icon = icon("clock"), color = "yellow"
+    )
+  })
+
+  # Graphs
+  output$strategyBar <- renderPlot({
+    filtered_data() %>%
+      count(strategy_2025) %>%
+      ggplot(aes(x = reorder(strategy_2025, n), y = n, fill = strategy_2025)) +
+      geom_col() +
+      coord_flip() +
+      labs(x = "Strategy", y = "Asset Count") +
+      theme_minimal() +
+      theme(legend.position = "none")
+  })
+
+  output$confidenceBox <- renderPlot({
+    ggplot(filtered_data(), aes(x = risk_level, y = avg_prediction_probability, fill = risk_level)) +
+      geom_boxplot() +
+      labs(x = "Risk Level", y = "Prediction Confidence") +
+      theme_minimal()
+  })
+
+  output$riskUtilScatter <- renderPlot({
+    ggplot(filtered_data(), aes(x = utilization_score, y = risk_rate, color = strategy_2025)) +
+      geom_point(alpha = 0.6) +
+      labs(x = "Utilization Score", y = "Risk Rate") +
+      theme_minimal()
+  })
+
+  output$heatmap <- renderPlot({
+    filtered_data() %>%
+      count(strategy_2025, confidence_level) %>%
+      ggplot(aes(x = strategy_2025, y = confidence_level, fill = n)) +
+      geom_tile(color = "white") +
+      scale_fill_gradient(low = "#E0F7FA", high = "#01579B") +
+      labs(x = "Strategy", y = "Confidence", fill = "Count") +
+      theme_minimal()
+  })
+}
+
+shinyApp(ui, server)
+
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+
+# Graph 1: WO vs Risk Rate
+plot1 <- combined_dashboard_data %>%
+  ggplot(aes(x = total_wos, y = risk_rate)) +
+  geom_point(alpha = 0.4, color = "steelblue") +
+  facet_wrap(~ company) +
+  labs(title = "Work Orders vs Risk Rate", x = "Total Work Orders", y = "Risk Rate") +
+  theme_minimal()
+
+# Graph 2: Utilization vs Confidence
+plot2 <- combined_dashboard_data %>%
+  ggplot(aes(x = utilization_score, y = avg_prediction_probability)) +
+  geom_point(alpha = 0.5, color = "#1E88E5") +
+  facet_wrap(~ company) +
+  labs(title = "Utilization vs Confidence", x = "Utilization Score", y = "Prediction Confidence") +
+  theme_minimal()
+
+# Graph 3: Cost Savings by Strategy
+plot3 <- combined_dashboard_data %>%
+  group_by(company, strategy_2025) %>%
+  summarise(cost_savings = sum(expected_cost_savings, na.rm = TRUE)) %>%
+  ggplot(aes(x = strategy_2025, y = cost_savings, fill = strategy_2025)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ company) +
+  labs(title = "Cost Savings by Strategy", x = "Strategy", y = "Expected Cost Savings") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Graph 4: Risk Level Distribution
+plot4 <- combined_dashboard_data %>%
+  ggplot(aes(x = risk_level, fill = risk_level)) +
+  geom_bar(show.legend = FALSE) +
+  facet_wrap(~ company) +
+  labs(title = "Risk Level Distribution", x = "Risk Level", y = "Asset Count") +
+  theme_minimal()
+
+# Graph 5: Heatmap Strategy x Confidence
+plot5 <- combined_dashboard_data %>%
+  count(company, strategy_2025, confidence_level) %>%
+  ggplot(aes(x = strategy_2025, y = confidence_level, fill = n)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ company) +
+  scale_fill_gradient(low = "#E3F2FD", high = "#0D47A1") +
+  labs(title = "Strategy vs Confidence", x = "Strategy", y = "Confidence") +
+  theme_minimal()
+
+# Combine all plots
+final_plot <- (plot1 | plot2) / (plot3 | plot4) / plot5
+
+# Show combined plot
+final_plot
+
+```
+
+
+
+
+Combined dashboard 
+
+```{r}
+# app.R
+
+# Load required libraries
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(dplyr)
+library(DT)
+
+# Load your preprocessed data (make sure this file is in the same folder)
+combined_dashboard_data <- readRDS("combined_dashboard_data.rds")
+
+# Dashboard Function
+run_combined_dashboard <- function(combined_dashboard_data) {
+  ui <- dashboardPage(
+    dashboardHeader(title = "Fleet Intelligence Dashboard"),
+    dashboardSidebar(
+      sidebarMenu(
+        menuItem("Cost Strategy", tabName = "strategy_tab", icon = icon("dollar-sign")),
+        menuItem("Asset Utilization", tabName = "utilization_tab", icon = icon("tachometer-alt")),
+        menuItem("Strategic Insights", tabName = "combined_tab", icon = icon("project-diagram")),
+        selectInput("company", "Filter by Company", choices = c("All", unique(combined_dashboard_data$Company)), selected = "All"),
+        selectInput("risk", "Filter by Risk Level", choices = c("All", unique(combined_dashboard_data$risk_level)), selected = "All"),
+        selectInput("strategy", "Filter by Strategy", choices = c("All", unique(combined_dashboard_data$strategy)), selected = "All")
+      )
+    ),
+    dashboardBody(
+      tabItems(
+        tabItem(tabName = "strategy_tab",
+          fluidRow(
+            valueBoxOutput("total_assets_strategy", width = 3),
+            valueBoxOutput("total_cost_strategy", width = 3),
+            valueBoxOutput("estimated_savings_strategy", width = 3),
+            valueBoxOutput("avg_repair_duration", width = 3)
+          ),
+          fluidRow(
+            box(title = "Predicted Cost by Strategy", width = 6, plotOutput("cost_by_strategy")),
+            box(title = "Strategy Distribution", width = 6, plotOutput("strategy_distribution"))
+          ),
+          fluidRow(
+            box(title = "Company-wise Predicted Cost", width = 12, plotOutput("cost_by_company"))
+          )
+        ),
+        tabItem(tabName = "utilization_tab",
+          fluidRow(
+            valueBoxOutput("total_assets_util", width = 3),
+            valueBoxOutput("avg_util_score", width = 3),
+            valueBoxOutput("expected_time_savings", width = 3),
+            valueBoxOutput("expected_cost_savings", width = 3)
+          ),
+          fluidRow(
+            box(title = "Strategy 2025 Breakdown", width = 6, plotOutput("strategy_2025_chart")),
+            box(title = "Utilization Score Distribution", width = 6, plotOutput("util_score_dist"))
+          ),
+          fluidRow(
+            box(title = "Risk Level by Company", width = 12, plotOutput("risk_by_company"))
+          )
+        ),
+        tabItem(tabName = "combined_tab",
+          fluidRow(
+            box(title = "Cost vs Time Savings by Strategy", width = 6, plotOutput("cost_vs_time")),
+            box(title = "Confidence vs Risk Rate", width = 6, plotOutput("confidence_vs_risk"))
+          ),
+          fluidRow(
+            box(title = "Combined Insights Table", width = 12, DTOutput("combined_table"))
+          )
+        )
+      )
+    )
+  )
+
+  server <- function(input, output) {
+    filtered_data <- reactive({
+      df <- combined_dashboard_data
+      if (input$company != "All") df <- df %>% filter(Company == input$company)
+      if (input$risk != "All") df <- df %>% filter(risk_level == input$risk)
+      if (input$strategy != "All") df <- df %>% filter(strategy == input$strategy)
+      df
+    })
+
+    # KPI Boxes
+    output$total_assets_strategy <- renderValueBox({
+      valueBox(formatC(nrow(filtered_data()), format = "d", big.mark = ","), "Total Assets", icon = icon("truck"), color = "aqua", width = 3)
+    })
+    output$total_cost_strategy <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$total_predicted_cost, na.rm = TRUE) / 1e6, format = "f", digits = 2), "M"), "Total Predicted Cost", icon = icon("dollar-sign"), color = "blue", width = 3)
+    })
+    output$estimated_savings_strategy <- renderValueBox({
+      valueBox(paste0("$", formatC(sum(filtered_data()$estimated_savings, na.rm = TRUE) / 1e6, format = "f", digits = 2), "M"), "Estimated Savings", icon = icon("chart-line"), color = "green", width = 3)
+    })
+    output$avg_repair_duration <- renderValueBox({
+      valueBox(round(mean(filtered_data()$avg_repair_duration, na.rm = TRUE), 1), "Avg. Repair Duration", icon = icon("clock"), color = "orange", width = 3)
+    })
+
+    output$cost_by_strategy <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy, y = total_predicted_cost, fill = strategy)) +
+        geom_bar(stat = "summary", fun = sum) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    })
+
+    output$strategy_distribution <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy, fill = strategy)) +
+        geom_bar() + theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    })
+
+    output$cost_by_company <- renderPlot({
+      ggplot(filtered_data(), aes(x = reorder(Company, -total_predicted_cost), y = total_predicted_cost, fill = Company)) +
+        geom_bar(stat = "summary", fun = sum) + coord_flip() + theme_minimal()
+    })
+
+    # Utilization Tab KPIs
+    output$total_assets_util <- renderValueBox({
+      valueBox(nrow(filtered_data()), "Total Assets", icon = icon("warehouse"), color = "purple", width = 3)
+    })
+    output$avg_util_score <- renderValueBox({
+      valueBox(round(mean(filtered_data()$utilization_score, na.rm = TRUE), 1), "Avg Utilization Score", icon = icon("tachometer-alt"), color = "yellow", width = 3)
+    })
+    output$expected_time_savings <- renderValueBox({
+      valueBox(sum(filtered_data()$expected_time_savings_hours, na.rm = TRUE), "Time Savings (hrs)", icon = icon("hourglass-half"), color = "olive", width = 3)
+    })
+    output$expected_cost_savings <- renderValueBox({
+      valueBox(sum(filtered_data()$expected_cost_savings, na.rm = TRUE), "Cost Savings ($)", icon = icon("piggy-bank"), color = "maroon", width = 3)
+    })
+
+    output$strategy_2025_chart <- renderPlot({
+      ggplot(filtered_data(), aes(x = strategy_2025, fill = strategy_2025)) +
+        geom_bar() + theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    })
+
+    output$util_score_dist <- renderPlot({
+      ggplot(filtered_data(), aes(x = utilization_score)) +
+        geom_histogram(bins = 30, fill = "steelblue") + theme_minimal()
+    })
+
+    output$risk_by_company <- renderPlot({
+      ggplot(filtered_data(), aes(x = Company, fill = risk_level)) +
+        geom_bar(position = "dodge") + theme_minimal() + coord_flip()
+    })
+
+    output$cost_vs_time <- renderPlot({
+      ggplot(filtered_data(), aes(x = expected_time_savings_hours, y = estimated_savings, color = strategy)) +
+        geom_point(alpha = 0.6) + theme_minimal()
+    })
+
+    output$confidence_vs_risk <- renderPlot({
+      ggplot(filtered_data(), aes(x = confidence_level, y = risk_rate, color = risk_level)) +
+        geom_point(alpha = 0.6) + theme_minimal()
+    })
+
+    output$combined_table <- renderDT({
+      datatable(filtered_data(), options = list(scrollX = TRUE))
+    })
+  }
+
+  shinyApp(ui, server)
+}
+
+# Launch the app
+run_combined_dashboard(combined_dashboard_data)
+
+
+```
+
+
+
+
+
+
+```{r}
+library(rsconnect)
+
+```
+
+
+
+
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(readr)
+library(scales)
+
+# Step 1: Import data
+asset_strategies <- read_csv("/Users/HP/Downloads/Capstone/asset_strategies_line_total.csv")  # <-- Update with actual path
+
+# Calculate total predicted cost across all assets
+total_predicted_cost_all <- asset_strategies %>%
+  summarise(total = sum(total_predicted_cost, na.rm = TRUE))
+
+# Format in millions
+total_predicted_cost_all %>%
+  mutate(total = dollar_format(scale = 1e-6, suffix = "M")(total))
+
+```
+

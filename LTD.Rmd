@@ -1,0 +1,954 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+
+# Load the package
+library(readxl)
+
+# Read a specific sheet
+ltd <- read_excel("~/Downloads/dataset_armaan.xlsx")
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+```{r}
+summary(ltd)
+names(ltd)
+str(ltd)
+```
+
+
+
+descriptive statistics 
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(skimr)
+library(janitor)
+ltd <- ltd %>% 
+  clean_names()  # Converts column names to snake_case
+
+
+
+```
+
+
+
+```{r}
+skim(ltd)
+
+```
+
+
+```{r}
+# Line total cost distribution
+ggplot(ltd, aes(x = line_total)) +
+  geom_histogram(binwidth = 100, fill = "steelblue") +
+  labs(title = "Distribution of Line Total", x = "Line Total ($)", y = "Count")
+
+# Log-scaled if skewed
+ggplot(ltd, aes(x = log1p(line_total))) +
+  geom_histogram(binwidth = 0.2, fill = "tomato") +
+  labs(title = "Log-Scaled Line Total", x = "log(Line Total + 1)", y = "Count")
+
+# Asset age
+ggplot(ltd, aes(x = asset_age_days)) +
+  geom_histogram(binwidth = 250, fill = "darkgreen") +
+  labs(title = "Distribution of Asset Age", x = "Asset Age (Days)", y = "Count")
+
+# Miles driven
+ggplot(ltd, aes(x = miles_driven)) +
+  geom_histogram(binwidth = 5000, fill = "purple") +
+  labs(title = "Distribution of Miles Driven", x = "Miles Driven", y = "Count")
+
+```
+
+
+```{r}
+ltd %>% count(company, sort = TRUE)
+ltd %>% count(category_class_desc, sort = TRUE)
+ltd %>% count(wo_reason_desc, sort = TRUE)
+
+```
+
+
+```{r}
+colSums(is.na(ltd))
+
+```
+
+diagnostic statistics 
+
+
+ Root Cause of High-Cost WOs
+```{r}
+# Threshold for high cost
+high_cost_thresh <- quantile(ltd$line_total, 0.9, na.rm = TRUE)
+ltd <- ltd %>% mutate(high_cost_flag = ifelse(line_total >= high_cost_thresh, 1, 0))
+
+# Drill down into high-cost root causes
+ltd %>%
+  filter(high_cost_flag == 1) %>%
+  group_by(company, category_class_desc, wo_reason_desc) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE), count = n(), .groups = "drop") %>%
+  arrange(desc(avg_cost))
+```
+
+
+Failure Recurrence Within 90 Days
+```{r}
+ltd <- ltd %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(time_since_last = as.numeric(difftime(open_date, lag(open_date), units = "days")),
+         recent_repeat_flag = ifelse(time_since_last <= 90, 1, 0)) %>%
+  ungroup()
+
+ltd %>%
+  group_by(unit_no) %>%
+  summarise(repeats_90_days = sum(recent_repeat_flag, na.rm = TRUE)) %>%
+  arrange(desc(repeats_90_days)) %>%
+  slice_head(n = 10)
+
+```
+
+ Unplanned After Planned
+```{r}
+ltd <- ltd %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(next_wo_type = lead(wo_reason_desc),
+         gap_days = as.numeric(difftime(lead(open_date), open_date, units = "days"))) %>%
+  ungroup()
+
+ltd %>%
+  filter(wo_reason_desc == "PLANNED", next_wo_type == "UNPLANNED", gap_days <= 30) %>%
+  count(unit_no, sort = TRUE) %>%
+  slice_head(n = 10)
+
+```
+
+Cost Variability by Maintenance Type
+
+```{r}
+ltd %>%
+  group_by(job_reason_desc) %>%
+  summarise(sd_cost = sd(line_total, na.rm = TRUE), count = n()) %>%
+  filter(count > 50) %>%
+  arrange(desc(sd_cost)) %>%
+  slice_head(n = 10)
+
+```
+
+
+Cost Differences by Company
+```{r}
+ltd %>%
+  group_by(company) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE), total_wo = n()) %>%
+  arrange(desc(avg_cost))
+
+```
+
+Now Visualise it 
+
+```{r}
+#Root Cause of High-Cost WOs
+library(dplyr)
+library(ggplot2)
+
+# Top 10% cost threshold
+high_cost_thresh <- quantile(ltd$line_total, 0.9, na.rm = TRUE)
+
+ltd <- ltd %>% mutate(high_cost_flag = ifelse(line_total >= high_cost_thresh, 1, 0))
+
+# Top high-cost breakdown
+high_cost_summary <- ltd %>%
+  filter(high_cost_flag == 1) %>%
+  group_by(company, category_class_desc, wo_reason_desc) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE), count = n(), .groups = "drop") %>%
+  arrange(desc(avg_cost))
+
+# Plot
+ggplot(high_cost_summary, aes(x = reorder(company, -avg_cost), y = avg_cost, fill = wo_reason_desc)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~category_class_desc, scales = "free") +
+  labs(title = "Avg High WO Cost by Company and Reason", y = "Avg Cost", x = "Company") +
+  theme_minimal()
+
+```
+Interpretation:Company A shows elevated costs for Service Vehicles and Yard Trucks, especially in Unplanned WOs.
+
+Tractors show high Collision/Origami cost spikes across all companies — possible accident patterns.
+
+Planned WOs are generally cheaper, validating preventive strategies.
+
+
+
+
+
+Repeated Failures Within 90 Days
+```{r}
+ltd <- ltd %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(time_since_last = as.numeric(difftime(open_date, lag(open_date), units = "days")),
+         recent_repeat_flag = ifelse(!is.na(time_since_last) & time_since_last <= 90, 1, 0)) %>%
+  ungroup()
+
+repeat_units <- ltd %>%
+  group_by(unit_no) %>%
+  summarise(repeats_90_days = sum(recent_repeat_flag, na.rm = TRUE)) %>%
+  arrange(desc(repeats_90_days)) %>%
+  slice_head(n = 10)
+
+# Plot
+ggplot(repeat_units, aes(x = reorder(unit_no, -repeats_90_days), y = repeats_90_days)) +
+  geom_col(fill = "firebrick") +
+  labs(title = "Top 10 Units with 90-Day Repeats", x = "Unit", y = "Repeat Count") +
+  theme_minimal() +
+  coord_flip()
+
+```
+
+
+Interpretation:Several units repeat over 150 WOs in < 90 days, which suggests:
+
+recurring mechanical faults
+
+ineffective fixes
+
+possible vendor quality issues
+
+Unplanned WOs After Planned
+```{r}
+ltd <- ltd %>%
+  arrange(unit_no, open_date) %>%
+  group_by(unit_no) %>%
+  mutate(
+    next_reason = lead(wo_reason_desc),
+    gap_days = as.numeric(difftime(lead(open_date), open_date, units = "days"))
+  ) %>%
+  ungroup()
+
+pm_followed_by_unplanned <- ltd %>%
+  filter(wo_reason_desc == "PLANNED", next_reason == "UNPLANNED", gap_days <= 30) %>%
+  count(unit_no, sort = TRUE) %>%
+  slice_head(n = 10)
+
+# Plot
+ggplot(pm_followed_by_unplanned, aes(x = reorder(unit_no, -n), y = n)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "PLANNED Followed by UNPLANNED (<30 Days)", x = "Unit", y = "Transitions") +
+  coord_flip() +
+  theme_minimal()
+
+```
+
+Interpretation: Preventive maintenance isn't preventing failure within a month in these units.
+
+This strongly indicates ineffective PM protocols.
+
+ Cost Variability by Job Reason
+```{r}
+job_variability <- ltd %>%
+  group_by(job_reason_desc) %>%
+  summarise(sd_cost = sd(line_total, na.rm = TRUE), count = n()) %>%
+  filter(count > 50) %>%
+  arrange(desc(sd_cost)) %>%
+  slice_head(n = 10)
+
+# Plot
+ggplot(job_variability, aes(x = reorder(job_reason_desc, sd_cost), y = sd_cost)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(title = "Top 10 Job Reasons by Cost Variability", x = "Job Reason", y = "Std Dev of Cost") +
+  theme_minimal()
+
+```
+
+Interpretation: Highest variance in costs is for:
+
+DAMAGE
+
+TECHNICIAN FOUND
+
+ROAD CALL
+
+These indicate inconsistent job scoping, likely due to:
+
+lack of standardization
+
+reactive, unplanned fixes
+
+ Cost Differences by Company
+
+```{r}
+company_costs <- ltd %>%
+  group_by(company) %>%
+  summarise(avg_cost = mean(line_total, na.rm = TRUE), .groups = "drop")
+
+# Plot
+ggplot(company_costs, aes(x = reorder(company, avg_cost), y = avg_cost)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(title = "Average Work Order Cost by Company", x = "Company", y = "Average Cost") +
+  theme_minimal()
+
+```
+
+Interpretation: Company C incurs the highest average cost.
+
+This might reflect:
+
+more complex assets
+
+higher reliance on external vendors
+
+operational geography
+
+
+```{r}
+names(ltd)
+
+```
+
+predicitve modelling:
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(caret)
+library(randomForest)
+library(e1071)
+library(forcats)
+library(corrplot)
+
+
+```
+
+
+```{r}
+# Preprocessing
+# Assume your data is named 'ltd'
+# Step 1: Clean & Feature Engineer
+# Drop or reduce high-cardinality vars
+ltd <- ltd %>%
+  mutate(
+    make = fct_lump(make, n = 15),
+    model = fct_lump(model, n = 20),
+    job_reason_desc = fct_lump(job_reason_desc, n = 15)
+  ) %>%
+  select(line_total, category_class_desc, company, wo_reason_desc, category, make, model,
+         job_reason_desc, utilization_flag, annualized_mileage, wo_duration_days,
+         asset_age_days, time_since_last, gap_days, x90_day_flag, recent_repeat_flag) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+
+
+
+```
+
+
+
+
+
+
+
+
+Model Input Selection
+
+
+
+
+
+Train/Test Split
+```{r}
+set.seed(123)
+train_index <- createDataPartition(ltd$line_total, p = 0.8, list = FALSE)
+train_set <- ltd[train_index, ]
+test_set <- ltd[-train_index, ]
+
+
+```
+
+
+
+Model Training: Random Forest
+```{r}
+# install.packages("ranger")
+library(ranger)
+
+rf_fast <- ranger(
+  line_total ~ ., 
+  data = train_set,
+  num.trees = 100,
+  importance = "impurity"
+)
+
+# Variable importance
+importance_df <- data.frame(
+  variable = names(rf_fast$variable.importance),
+  importance = rf_fast$variable.importance
+)
+
+library(ggplot2)
+ggplot(importance_df, aes(x = reorder(variable, importance), y = importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance (ranger)", x = "Feature", y = "Importance")
+
+
+```
+
+Prediction & Evaluation
+
+```{r}
+preds <- predict(rf_fast, data = test_set)$predictions
+
+# Evaluate performance
+postResample(pred = preds, obs = test_set$line_total)
+
+# Plot Actual vs Predicted
+ggplot(data.frame(actual = test_set$line_total, predicted = preds),
+       aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(color = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Line Total", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+
+```
+
+
+
+Log-Transformed Model
+```{r}
+
+set.seed(123)
+train_sample <- train_set %>% 
+  group_by(high_cost_flag = ifelse(line_total > 1000, 1, 0)) %>%
+  sample_n(size = min(5000, n()), replace = FALSE) %>%
+  ungroup()
+
+```
+
+```{r}
+library(dplyr)
+library(forcats)
+library(ranger)
+library(caret)
+library(ggplot2)
+
+# Lump high-cardinality factors and remove NAs
+ltd_clean <- ltd %>%
+  mutate(
+    make = fct_lump(make, n = 15),
+    model = fct_lump(model, n = 20),
+    job_reason_desc = fct_lump(job_reason_desc, n = 15),
+    wo_reason_desc = fct_lump(wo_reason_desc, n = 10),
+    utilization_flag = as.factor(utilization_flag)
+  ) %>%
+  select(line_total, category_class_desc, company, wo_reason_desc, category, make, model,
+         job_reason_desc, utilization_flag, annualized_mileage, wo_duration_days,
+         asset_age_days, time_since_last, gap_days, x90_day_flag, recent_repeat_flag) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+
+
+set.seed(123)
+train_index <- createDataPartition(ltd_clean$line_total, p = 0.8, list = FALSE)
+train_set <- ltd_clean[train_index, ]
+test_set  <- ltd_clean[-train_index, ]
+
+```
+
+
+
+```{r}
+train_sample <- train_set %>%
+  mutate(high_cost_flag = ifelse(line_total > 1000, 1, 0)) %>%
+  group_by(high_cost_flag) %>%
+  sample_n(size = min(5000, n()), replace = FALSE) %>%
+  ungroup()
+
+test_sample <- test_set %>% sample_n(3000)
+
+# Log-transform target
+train_sample$log_line_total <- log1p(train_sample$line_total)
+test_sample$log_line_total  <- log1p(test_sample$line_total)
+
+
+rf_log_model <- ranger(
+  log_line_total ~ . -line_total -high_cost_flag,
+  data = train_sample,
+  num.trees = 100,
+  importance = "impurity",
+  seed = 123
+)
+
+```
+
+
+
+```{r}
+log_preds <- predict(rf_log_model, data = test_sample)$predictions
+predicted_cost <- expm1(log_preds)
+
+# Metrics
+postResample(pred = predicted_cost, obs = test_sample$line_total)
+
+# Plot
+ggplot(data.frame(actual = test_sample$line_total, predicted = predicted_cost),
+       aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(color = "red", linetype = "dashed") +
+  labs(title = "Actual vs Predicted Line Total (Log-Model)", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+```
+
+
+
+
+Threshold Selection:
+Based on your distribution:
+
+90% of WOs are under $1000
+
+Costs > $1000 are rare and much more variable
+
+Best threshold: line_total = 1000
+
+```{r}
+library(dplyr)
+library(forcats)
+library(ranger)
+library(caret)
+library(ggplot2)
+
+
+# Lump high-cardinality variables
+ltd_clean <- ltd %>%
+  mutate(
+    make = fct_lump(make, n = 15),
+    model = fct_lump(model, n = 20),
+    job_reason_desc = fct_lump(job_reason_desc, n = 15),
+    wo_reason_desc = fct_lump(wo_reason_desc, n = 10),
+    utilization_flag = as.factor(utilization_flag)
+  ) %>%
+  select(line_total, category_class_desc, company, wo_reason_desc, category, make, model,
+         job_reason_desc, utilization_flag, annualized_mileage, wo_duration_days,
+         asset_age_days, time_since_last, gap_days, x90_day_flag, recent_repeat_flag) %>%
+  filter(if_all(everything(), ~ !is.na(.)))
+
+
+# Define threshold
+cost_threshold <- 1000
+
+# Split into low-cost and high-cost subsets
+ltd_low  <- ltd_clean %>% filter(line_total <= cost_threshold)
+ltd_high <- ltd_clean %>% filter(line_total > cost_threshold)
+
+
+set.seed(123)
+split_low  <- createDataPartition(ltd_low$line_total, p = 0.8, list = FALSE)
+split_high <- createDataPartition(ltd_high$line_total, p = 0.8, list = FALSE)
+
+train_low  <- ltd_low[split_low, ]
+test_low   <- ltd_low[-split_low, ]
+train_high <- ltd_high[split_high, ]
+test_high  <- ltd_high[-split_high, ]
+
+
+model_low <- ranger(line_total ~ ., data = train_low, num.trees = 100, importance = "impurity")
+model_high <- ranger(line_total ~ ., data = train_high, num.trees = 100, importance = "impurity")
+
+
+pred_low  <- predict(model_low, data = test_low)$predictions
+pred_high <- predict(model_high, data = test_high)$predictions
+
+# Metrics
+cat("Low-Cost Segment Performance:\n")
+print(postResample(pred_low, test_low$line_total))
+
+cat("\nHigh-Cost Segment Performance:\n")
+print(postResample(pred_high, test_high$line_total))
+
+```
+
+
+
+Auto-Routing Prediction Function in R
+
+```{r}
+predict_segmented_cost <- function(new_data, model_low, model_high, threshold = 1000) {
+  # Ensure structure
+  if (!"line_total" %in% colnames(new_data)) {
+    stop("The input data must contain a 'line_total' column to route predictions.")
+  }
+  
+  # Preallocate result
+  predictions <- numeric(nrow(new_data))
+  
+  # Identify low-cost and high-cost rows
+  low_idx  <- which(new_data$line_total <= threshold)
+  high_idx <- which(new_data$line_total > threshold)
+  
+  # Predict with respective models
+  if (length(low_idx) > 0) {
+    predictions[low_idx] <- predict(model_low, data = new_data[low_idx, ])$predictions
+  }
+  if (length(high_idx) > 0) {
+    predictions[high_idx] <- predict(model_high, data = new_data[high_idx, ])$predictions
+  }
+  
+  return(predictions)
+}
+
+
+# Predict on combined test set
+combined_test <- bind_rows(test_low, test_high)
+
+# Get routed predictions
+combined_preds <- predict_segmented_cost(combined_test, model_low, model_high)
+
+# Evaluate
+postResample(pred = combined_preds, obs = combined_test$line_total)
+
+
+
+ggplot(data.frame(actual = combined_test$line_total, predicted = combined_preds),
+       aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.3, color = "darkblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Segmented Model: Actual vs Predicted Line Total",
+       x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+```
+
+
+
+
+Tuned XGBoost Regression with caret
+```{r}
+
+
+```
+Modeling Limit Reached with Current Data
+All models (RF, XGB, tuned XGB) stabilize at R² ≈ 0.10 → the signal is weak across most features.
+
+Missing High-Leverage Predictors
+Likely missing cost-specific drivers like:
+
+Type of part replaced
+
+Labor vs part split
+
+Service vendor/provider
+
+WO comments or descriptions (text)
+
+High Unexplained Variance in Target
+Random events (e.g., accidents, major repairs) that aren’t represented in structured variables.
+
+
+```{r}
+names(ltd)
+
+```
+
+
+For better explainability and planning insight
+
+
+Re-import the Original Dataset (with Unit_No)
+```{r}
+# Step 1: Re-import original dataset (use your correct path and file type)
+ltd_raw <- read_excel("~/Downloads/dataset_armaan.xlsx")  # or read_excel() for .xlsx
+
+# Step 2: Match rows by row number and restore Unit_No
+ltd_raw <- ltd_raw %>%
+  rename(unit_no = Unit_No) %>%
+  mutate(row_id = row_number())
+
+ltd <- ltd %>%
+  mutate(row_id = row_number())
+
+# Step 3: Merge unit_no back into your cleaned dataset
+ltd <- ltd %>%
+  left_join(ltd_raw %>% select(row_id, unit_no), by = "row_id") %>%
+  select(-row_id)
+
+
+```
+
+
+Then Run Asset-Level Aggregation
+```{r}
+asset_level_data <- ltd %>%
+  group_by(unit_no) %>%
+  summarise(
+    total_cost = sum(line_total, na.rm = TRUE),
+    avg_annualized_mileage = mean(annualized_mileage, na.rm = TRUE),
+    avg_wo_duration_days = mean(wo_duration_days, na.rm = TRUE),
+    avg_asset_age_days = mean(asset_age_days, na.rm = TRUE),
+    avg_time_since_last = mean(time_since_last, na.rm = TRUE),
+    avg_gap_days = mean(gap_days, na.rm = TRUE),
+    x90_day_flag_ratio = mean(x90_day_flag, na.rm = TRUE),
+    recent_repeat_flag_ratio = mean(recent_repeat_flag, na.rm = TRUE),
+    
+    # Mode-like summaries for categorical fields
+    most_common_category_class_desc = names(sort(table(category_class_desc), decreasing = TRUE))[1],
+    most_common_company = names(sort(table(company), decreasing = TRUE))[1],
+    most_common_wo_reason_desc = names(sort(table(wo_reason_desc), decreasing = TRUE))[1],
+    most_common_category = names(sort(table(category), decreasing = TRUE))[1],
+    most_common_make = names(sort(table(make), decreasing = TRUE))[1],
+    most_common_model = names(sort(table(model), decreasing = TRUE))[1],
+    most_common_job_reason_desc = names(sort(table(job_reason_desc), decreasing = TRUE))[1],
+    most_common_utilization_flag = names(sort(table(utilization_flag), decreasing = TRUE))[1]
+  ) %>%
+  ungroup()
+
+
+```
+
+feature selection
+
+
+Use Dummy Encoding for All Features
+```{r}
+# Create a new dataset with all predictors including categoricals
+all_vars <- asset_level_data %>%
+  select(-unit_no)  # Remove ID column, keep all others including categorical
+
+# Create dummy variables
+dummies <- dummyVars(total_cost ~ ., data = all_vars)
+encoded <- predict(dummies, newdata = all_vars)
+encoded_df <- data.frame(encoded)
+encoded_df$total_cost <- all_vars$total_cost
+
+```
+
+
+Run Feature Importance on Full Feature Set
+```{r}
+set.seed(123)
+full_model_fs <- train(
+  total_cost ~ .,
+  data = encoded_df,
+  method = "rf",  # Random forest captures nonlinearities and factor interactions
+  trControl = trainControl(method = "cv", number = 5)
+)
+
+```
+
+
+Visualize Full Feature Importance
+```{r}
+importance_df <- varImp(full_model_fs)$importance
+importance_df$Feature <- rownames(importance_df)
+
+library(ggplot2)
+ggplot(importance_df, aes(x = reorder(Feature, Overall), y = Overall)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(title = "Full Feature Importance (with Categoricals)",
+       x = "Feature", y = "Importance") +
+  theme_minimal()
+
+```
+
+
+Define a Cost Threshold for Assets
+```{r}
+threshold <- quantile(asset_level_data$total_cost, 0.90, na.rm = TRUE)
+
+```
+
+
+ Split Into Low and High Cost Assets
+```{r}
+asset_low <- asset_level_data %>% filter(total_cost <= threshold)
+asset_high <- asset_level_data %>% filter(total_cost > threshold)
+
+
+```
+ 
+ 
+Encode & Train Models for Each Segment
+Low-Cost Model
+
+
+```{r}
+library(caret)
+
+# Low-cost dummy encoder
+dummies_low <- dummyVars(total_cost ~ ., data = asset_low %>% select(-unit_no))
+encoded_low <- predict(dummies_low, newdata = asset_low %>% select(-unit_no))
+encoded_low_df <- as.data.frame(encoded_low)
+encoded_low_df$total_cost <- asset_low$total_cost
+
+# Train
+set.seed(123)
+model_low_asset <- train(
+  total_cost ~ .,
+  data = encoded_low_df,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5)
+)
+
+```
+
+High-Cost Model
+
+
+```{r}
+dummies_high <- dummyVars(total_cost ~ ., data = asset_high %>% select(-unit_no))
+encoded_high <- predict(dummies_high, newdata = asset_high %>% select(-unit_no))
+encoded_high_df <- as.data.frame(encoded_high)
+encoded_high_df$total_cost <- asset_high$total_cost
+
+# Train
+set.seed(123)
+model_high_asset <- train(
+  total_cost ~ .,
+  data = encoded_high_df,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5)
+)
+
+
+```
+
+
+ Auto-Routing Prediction Function (Asset-Level)
+```{r}
+predict_segmented_asset_cost <- function(new_data, model_low, model_high, threshold, dummies_low, dummies_high) {
+  low_idx <- which(new_data$total_cost <= threshold)
+  high_idx <- which(new_data$total_cost > threshold)
+  
+  # Preallocate
+  predictions <- numeric(nrow(new_data))
+  
+  # Predict on low-cost assets
+  if (length(low_idx) > 0) {
+    new_low <- predict(dummies_low, newdata = new_data[low_idx, ] %>% select(-unit_no)) %>% as.data.frame()
+    predictions[low_idx] <- predict(model_low, newdata = new_low)
+  }
+  
+  # Predict on high-cost assets
+  if (length(high_idx) > 0) {
+    new_high <- predict(dummies_high, newdata = new_data[high_idx, ] %>% select(-unit_no)) %>% as.data.frame()
+    predictions[high_idx] <- predict(model_high, newdata = new_high)
+  }
+  
+  return(predictions)
+}
+
+
+```
+
+
+Run the Prediction + Evaluation
+```{r}
+asset_preds <- predict_segmented_asset_cost(
+  asset_level_data,
+  model_low_asset,
+  model_high_asset,
+  threshold,
+  dummies_low,
+  dummies_high
+)
+
+postResample(pred = asset_preds, obs = asset_level_data$total_cost)
+
+
+```
+
+
+Actual vs Predicted Scatter Plot
+
+
+```{r}
+library(ggplot2)
+
+ggplot(data.frame(actual = asset_level_data$total_cost, predicted = asset_preds),
+       aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(
+    title = "Asset-Level Hybrid Model: Actual vs Predicted Cost",
+    x = "Actual Total Cost",
+    y = "Predicted Total Cost"
+  ) +
+  theme_minimal()
+
+```
+Our hybrid asset-level model shows strong alignment with actual maintenance cost. With an R² of 0.89, most assets fall close to the prediction line, validating both the model’s stability and our segment-specific training approach.
+
+
+
+Residual Plot (Optional)
+```{r}
+residuals <- asset_level_data$total_cost - asset_preds
+
+ggplot(data.frame(predicted = asset_preds, residuals = residuals),
+       aes(x = predicted, y = residuals)) +
+  geom_point(alpha = 0.5, color = "darkorange") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Residuals vs Predicted Cost",
+    x = "Predicted Total Cost",
+    y = "Residuals (Actual - Predicted)"
+  ) +
+  theme_minimal()
+
+```
+Residual analysis confirms stable model behavior. The majority of predictions cluster around zero error. Underprediction is primarily isolated to the highest-cost assets — a known challenge due to limited sample size and variance in extreme cases.
+
+ Add Predictions to Your Dataset for Export or Further Analysis
+```{r}
+asset_level_data <- asset_level_data %>%
+  mutate(predicted_cost = asset_preds)
+
+```
+
+
+How to Compare Predictions
+
+```{r}
+# Assuming you have this from WO-level predictions
+wo_level_preds <- data.frame(
+  unit_no = wo_data$unit_no,
+  actual_line_total = wo_data$line_total,
+  predicted_line_total = predict_segmented_cost(wo_data, model_low, model_high)
+)
+
+# Summarize to asset level
+wo_aggregated <- wo_level_preds %>%
+  group_by(unit_no) %>%
+  summarise(
+    actual_total_cost = sum(actual_line_total, na.rm = TRUE),
+    predicted_total_cost_wo = sum(predicted_line_total, na.rm = TRUE)
+  )
+
+```
+
