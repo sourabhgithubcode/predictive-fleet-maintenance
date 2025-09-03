@@ -11,7 +11,7 @@ To identify high-cost maintenance assets and recommend data-driven strategies to
 - Built a **Random Forest** classification model to flag high-cost work orders (top 10% by total cost)
 - Achieved **98% prediction accuracy** on testing data using engineered features like mileage ratio, asset age, and usage patterns
 - Developed **clustering models** to segment assets into strategy buckets: "Replace", "Monitor Closely", and "Maintain"
-- Created an interactive **R Shiny dashboard** for company-wide visibility and actionable insights
+- Created an interactive **R Shiny dashboard** for company-wide visibility and actionable insights (Link: https://6kk2xw-sourabh-rodagi.shinyapps.io/fleet_dashboard/)
 - Highlighted **$800M+ in cost-saving opportunities** based on asset-level segmentation
 
 ## 🛠️ Tech Stack
