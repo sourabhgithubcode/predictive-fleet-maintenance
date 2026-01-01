@@ -5,6 +5,15 @@
 **Organization:** Reyes Holdings
 **Academic Institution:** DePaul University - M.S. Business Analytics
 **Project Period:** Spring Quarter 2024
+**Video Explanation of How We Predicted Fleet Failures Before They Happened:<div>
+    <a href="https://www.loom.com/share/a889629c90214fdf8e39cc5c9110e6d0">
+      <p>Turning 134,000 Work Orders Into Smarter Fleet Decisions - Watch Video</p>
+    </a>
+    <a href="https://www.loom.com/share/a889629c90214fdf8e39cc5c9110e6d0">
+      <img style="max-width:300px;" src="https://cdn.loom.com/sessions/thumbnails/a889629c90214fdf8e39cc5c9110e6d0-512526f72c44e1c1-full-play.gif#t=0.1">
+    </a>
+  </div>
+
 
 ---
 
@@ -202,6 +211,8 @@ High costs aren't random—they cluster around specific asset types, maintenance
 **Trade-offs:**
 - **Simplicity vs. Detail:** Dashboard prioritizes high-level insights over granular drill-downs (to avoid overwhelming users)
 - **Static snapshots vs. Real-time data:** Dashboard uses batch data (not live feeds), so it requires periodic refresh
+
+<img width="1828" height="1261" alt="annotely_image" src="https://github.com/user-attachments/assets/bb4d284f-9c57-4ed5-9667-b994f8385c58" />
 
 ---
 
