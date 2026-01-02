@@ -1,0 +1,83 @@
+name: fleet-maintenance
+channels:
+  - conda-forge
+  - r
+  - defaults
+dependencies:
+  # R environment
+  - r-base=4.3.*
+
+  # Core R packages
+  - r-essentials
+
+  # Data manipulation and processing
+  - r-dplyr
+  - r-tidyr
+  - r-readr
+  - r-readxl
+  - r-data.table
+  - r-purrr
+  - r-tibble
+  - r-stringr
+  - r-forcats
+  - r-janitor
+
+  # Date/Time handling
+  - r-lubridate
+
+  # Visualization
+  - r-ggplot2
+  - r-scales
+  - r-gridextra
+  - r-patchwork
+
+  # Machine Learning and Statistical Modeling
+  - r-randomforest
+  - r-ranger
+  - r-caret
+  - r-e1071
+
+  # Clustering and Dimensionality Reduction
+  - r-cluster
+  - r-umap
+
+  # Survival Analysis
+  - r-survival
+  - r-survminer
+
+  # Model Evaluation
+  - r-proc
+  - r-broom
+
+  # Data Exploration and Validation
+  - r-skimr
+  - r-naniar
+  - r-corrplot
+
+  # Interactive Dashboards
+  - r-shiny
+  - r-shinydashboard
+  - r-dt
+  - r-flexdashboard
+
+  # Formatting and Presentation
+  - r-formattable
+  - r-knitr
+  - r-rmarkdown
+
+  # Deployment
+  - r-rsconnect
+
+  # Specialty packages
+  - r-fmsb
+  - r-fastdummies
+  - r-waffle
+
+  # Python (optional, for hybrid workflows)
+  - python=3.11
+  - pip
+
+  # Pip-only packages
+  - pip:
+    - jupyter
+    - jupyterlab

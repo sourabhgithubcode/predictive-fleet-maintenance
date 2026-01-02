@@ -1,0 +1,77 @@
+# R Package Dependencies for Predictive Fleet Maintenance Project
+# Install using: install.packages(c("package1", "package2", ...))
+# Or use renv for better reproducibility
+
+# Core Data Manipulation
+dplyr
+tidyr
+readr
+readxl
+data.table
+purrr
+tibble
+stringr
+forcats
+janitor
+
+# Date/Time Handling
+lubridate
+
+# Visualization
+ggplot2
+scales
+gridExtra
+patchwork
+
+# Machine Learning
+randomForest
+ranger
+caret
+e1071
+
+# Clustering and Dimensionality Reduction
+cluster
+umap
+
+# Survival Analysis
+survival
+survminer
+
+# Model Evaluation and Diagnostics
+pROC
+broom
+corrplot
+
+# Data Exploration
+skimr
+naniar
+
+# Interactive Dashboards
+shiny
+shinydashboard
+DT
+flexdashboard
+
+# Formatting and Presentation
+formattable
+knitr
+rmarkdown
+
+# Deployment
+rsconnect
+
+# Specialty Packages
+fmsb
+fastDummies
+waffle
+
+# Alternative Installation Script
+# Copy and paste into R console:
+# packages <- c("dplyr", "tidyr", "readr", "readxl", "data.table", "purrr",
+#               "tibble", "stringr", "forcats", "janitor", "lubridate",
+#               "ggplot2", "scales", "gridExtra", "patchwork", "randomForest",
+#               "ranger", "caret", "e1071", "cluster", "umap", "survival",
+#               "survminer", "pROC", "broom", "corrplot", "skimr", "naniar",
+#               "shiny", "shinydashboard", "DT", "flexdashboard", "formattable",
+#               "knitr", "rmarkdown", "rsconnect", "fmsb", "fastDummies", "waffle")
+# install.packages(packages)
